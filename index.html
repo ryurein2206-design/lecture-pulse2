@@ -1,0 +1,715 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LecturePulse - 講義リアルタイムリアクション</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- MQTT.js for Realtime Sync -->
+    <script src="https://unpkg.com/mqtt@4.3.7/dist/mqtt.min.js"></script>
+    <style>
+        @keyframes floatUp {
+            0% { transform: translateY(0px) scale(0.8); opacity: 1; }
+            100% { transform: translateY(-120px) scale(1.4); opacity: 0; }
+        }
+        .floating-emoji {
+            position: absolute;
+            animation: floatUp 1.2s ease-out forwards;
+            pointer-events: none;
+            font-size: 2rem;
+        }
+        @keyframes pulseGlow {
+            0%, 100% { box-shadow: 0 0 15px rgba(239, 68, 68, 0.4); }
+            50% { box-shadow: 0 0 35px rgba(239, 68, 68, 0.8); }
+        }
+        .fever-active {
+            animation: pulseGlow 1s infinite;
+        }
+    </style>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen flex flex-col font-sans">
+
+    <!-- 受講生ロック時の上部バー -->
+    <div id="student-lock-bar" class="hidden bg-indigo-600 text-white px-4 py-2 text-sm flex justify-between items-center shadow-md">
+        <span>🔒 受講生モードで参加中 (ルーム: <span id="current-room-badge" class="font-bold">LECTURE-101</span>)</span>
+        <button onclick="exitStudentLock()" class="bg-indigo-800 hover:bg-indigo-900 px-3 py-1 rounded text-xs transition">講師画面のロック解除 (PIN必要)</button>
+    </div>
+
+    <!-- 通常ヘッダー -->
+    <header id="main-header" class="bg-slate-800 border-b border-slate-700 px-4 py-3 flex flex-wrap justify-between items-center gap-3">
+        <div class="flex items-center space-x-3">
+            <div class="bg-gradient-to-r from-indigo-500 to-purple-500 p-2 rounded-xl text-white font-black text-xl shadow-lg">LP</div>
+            <div>
+                <h1 class="font-bold text-lg leading-tight">LecturePulse</h1>
+                <div class="flex items-center space-x-2 text-xs text-slate-400">
+                    <span id="sync-status" class="inline-block w-2 h-2 rounded-full bg-emerald-400"></span>
+                    <span id="sync-status-text">🌐 クラウド同期中</span>
+                    <span class="text-slate-600">|</span>
+                    <span>ルーム: <strong id="header-room-code" class="text-indigo-300">LECTURE-101</strong></span>
+                </div>
+            </div>
+        </div>
+
+        <div class="flex items-center space-x-2">
+            <div id="nav-tabs" class="bg-slate-900 p-1 rounded-xl flex space-x-1 border border-slate-700">
+                <button id="tab-student" onclick="switchView('student')" class="px-4 py-1.5 rounded-lg text-sm font-medium transition bg-indigo-600 text-white shadow">受講生画面</button>
+                <button id="tab-lecturer" onclick="switchView('lecturer')" class="px-4 py-1.5 rounded-lg text-sm font-medium transition text-slate-400 hover:text-white">講師・スクリーン画面</button>
+            </div>
+            <button id="btn-share-qr" onclick="openQRModal()" class="bg-slate-700 hover:bg-slate-600 px-3 py-1.5 rounded-xl text-sm font-medium transition flex items-center space-x-1">
+                <span>🔗 受講生に共有 (QR)</span>
+            </button>
+        </div>
+    </header>
+
+    <!-- メインコンテンツ -->
+    <main class="flex-1 max-w-6xl w-full mx-auto p-4 sm:p-6 flex flex-col">
+
+        <!-- ==================== 受講生画面 ==================== -->
+        <div id="view-student" class="flex-1 flex flex-col max-w-md mx-auto w-full justify-center">
+            <div class="bg-slate-800/80 backdrop-blur border border-slate-700 rounded-2xl p-6 shadow-2xl relative overflow-hidden" id="student-card">
+                
+                <div id="student-fever-banner" class="hidden absolute top-0 left-0 right-0 bg-gradient-to-r from-red-500 via-orange-500 to-amber-500 text-white text-center py-1 text-xs font-black tracking-widest uppercase animate-pulse">
+                    🔥 講義熱気MAX フィーバー中!! 🔥
+                </div>
+
+                <div class="text-center mb-6 mt-2">
+                    <span class="bg-indigo-900/60 text-indigo-300 text-xs px-3 py-1 rounded-full border border-indigo-700/50">講義リアクション</span>
+                    <p class="text-sm text-slate-300 mt-1">今の気持ちや理解度をタップして送信しよう</p>
+                </div>
+
+                <div id="student-buttons-grid" class="grid grid-cols-2 gap-3 mb-6">
+                    <!-- 動的生成 -->
+                </div>
+
+                <div class="space-y-2">
+                    <div class="flex justify-between text-xs text-slate-400">
+                        <span>連打エネルギー</span>
+                        <span id="energy-text">100%</span>
+                    </div>
+                    <div class="w-full bg-slate-700 h-2 rounded-full overflow-hidden">
+                        <div id="energy-bar" class="bg-gradient-to-r from-indigo-500 to-emerald-400 h-full w-full transition-all duration-150"></div>
+                    </div>
+                </div>
+
+                <div class="mt-6 pt-4 border-t border-slate-700 flex justify-between items-center text-sm text-slate-400">
+                    <span>あなたの送信数: <strong id="my-reaction-count" class="text-white">0</strong> 回</span>
+                    <span class="text-xs bg-slate-700 px-2.5 py-1 rounded-lg">ルーム: <span id="student-room-display" class="text-indigo-300">LECTURE-101</span></span>
+                </div>
+            </div>
+        </div>
+
+        <!-- ==================== 講師・スクリーン画面 ==================== -->
+        <div id="view-lecturer" class="hidden flex-1 flex flex-col space-y-6">
+            
+            <div class="bg-slate-800 border border-slate-700 rounded-2xl p-4 flex flex-wrap justify-between items-center gap-4 shadow-lg">
+                <div class="flex items-center space-x-4">
+                    <div>
+                        <label class="block text-xs text-slate-400 mb-1">講義コード / ルーム名</label>
+                        <div class="flex items-center space-x-2">
+                            <input type="text" id="input-room-code" value="LECTURE-101" class="bg-slate-900 border border-slate-700 px-3 py-1.5 rounded-lg text-sm font-bold text-indigo-300 w-36 focus:outline-none focus:border-indigo-500">
+                            <button onclick="changeRoomCode()" class="bg-indigo-600 hover:bg-indigo-500 px-3 py-1.5 rounded-lg text-xs font-medium transition">変更</button>
+                        </div>
+                    </div>
+                    <div>
+                        <label class="block text-xs text-slate-400 mb-1">現在の接続状況</label>
+                        <div class="flex items-center space-x-2 py-1.5">
+                            <span class="flex h-2.5 w-2.5 relative">
+                                <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                                <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
+                            </span>
+                            <span id="active-users-count" class="text-sm font-bold text-emerald-400">クラウド接続中</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="flex items-center space-x-2">
+                    <button onclick="triggerDemoMode()" class="bg-amber-600 hover:bg-amber-500 px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center space-x-1 shadow">
+                        <span>⚡ 1人テスト用デモ（自動送信）</span>
+                    </button>
+                    <button onclick="openReactionCustomizerModal()" class="bg-slate-700 hover:bg-slate-600 px-3.5 py-2 rounded-xl text-xs font-medium transition">
+                        ⚙️ リアクション種類を変更・編集
+                    </button>
+                </div>
+            </div>
+
+            <!-- メトリクス -->
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div class="bg-slate-800 border border-slate-700 rounded-2xl p-4 shadow flex flex-col justify-between">
+                    <div class="text-xs text-slate-400">総リアクション数 (本日の講義)</div>
+                    <div class="text-3xl font-black text-indigo-400 my-2" id="stat-total-reactions">0</div>
+                    <div class="text-xs text-emerald-400">▲ リアルタイム集計中</div>
+                </div>
+                <div class="bg-slate-800 border border-slate-700 rounded-2xl p-4 shadow flex flex-col justify-between">
+                    <div class="text-xs text-slate-400">現在の盛り上がり (直近1分)</div>
+                    <div class="text-3xl font-black text-amber-400 my-2" id="stat-current-rate">0 <span class="text-sm font-normal text-slate-400">回/分</span></div>
+                    <div class="w-full bg-slate-700 h-2 rounded-full overflow-hidden">
+                        <div id="stat-rate-bar" class="bg-amber-400 h-full w-0 transition-all duration-300"></div>
+                    </div>
+                </div>
+                <div class="bg-slate-800 border border-slate-700 rounded-2xl p-4 shadow flex flex-col justify-between" id="lecturer-fever-card">
+                    <div class="text-xs text-slate-400">講義ステータス</div>
+                    <div class="text-xl font-black text-white my-2">
+                        <span id="stat-fever-status" class="px-3 py-1 rounded-full text-xs bg-slate-700 text-slate-300">通常モード</span>
+                    </div>
+                    <div class="text-xs text-slate-400">受講生の熱量が上がるとFEVER発動</div>
+                </div>
+            </div>
+
+            <!-- グラフエリア -->
+            <div class="bg-slate-800 border border-slate-700 rounded-2xl p-6 shadow-xl flex-1 flex flex-col">
+                <div class="flex flex-wrap justify-between items-center gap-4 mb-4">
+                    <div>
+                        <h2 class="font-bold text-lg">リアクション推移グラフ</h2>
+                        <p class="text-xs text-slate-400">大学の講義時間スケールに合わせた集計</p>
+                    </div>
+                    
+                    <div class="flex flex-wrap items-center gap-2">
+                        <div class="bg-slate-900 p-1 rounded-xl flex space-x-1 border border-slate-700 text-xs">
+                            <span class="px-2 py-1.5 text-slate-400 font-medium self-center">時間集計:</span>
+                            <button onclick="setAggregationInterval(30)" id="btn-agg-30" class="px-3 py-1.5 rounded-lg transition bg-indigo-600 text-white font-bold">30分</button>
+                            <button onclick="setAggregationInterval(60)" id="btn-agg-60" class="px-3 py-1.5 rounded-lg transition text-slate-400 hover:text-white">1時間</button>
+                            <button onclick="setAggregationInterval(90)" id="btn-agg-90" class="px-3 py-1.5 rounded-lg transition text-slate-400 hover:text-white">1時間半</button>
+                            <button onclick="setAggregationInterval(5)" id="btn-agg-5" class="px-3 py-1.5 rounded-lg transition text-slate-400 hover:text-white">5分</button>
+                        </div>
+
+                        <button onclick="exportCSV()" class="bg-slate-700 hover:bg-slate-600 px-3 py-2 rounded-xl text-xs font-medium transition flex items-center space-x-1">
+                            <span>📥 CSV出力</span>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="relative w-full h-72 sm:h-96 bg-slate-900/50 rounded-xl border border-slate-700/60 p-2 flex items-center justify-center">
+                    <canvas id="reactionChart" class="w-full h-full"></canvas>
+                </div>
+            </div>
+
+        </div>
+
+    </main>
+
+    <!-- QR共有モーダル -->
+    <div id="qr-modal" class="hidden fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div class="bg-slate-800 border border-slate-700 rounded-3xl max-w-md w-full p-6 shadow-2xl text-center relative">
+            <button onclick="closeQRModal()" class="absolute top-4 right-4 text-slate-400 hover:text-white text-xl font-bold">&times;</button>
+            
+            <h3 class="text-xl font-bold mb-1">受講生用 参加QRコード</h3>
+            <p class="text-xs text-slate-400 mb-4">スマホのカメラでスキャンしてリアクション画面を開けます</p>
+
+            <div class="bg-white p-4 rounded-2xl inline-block shadow-inner mb-4">
+                <div id="qrcode-container" class="w-48 h-48 flex items-center justify-center bg-slate-100 rounded-lg text-slate-900">
+                    <!-- QR描画 -->
+                </div>
+            </div>
+
+            <div class="bg-slate-900 p-3 rounded-xl border border-slate-700 mb-4 text-left">
+                <div class="text-xs text-slate-400 mb-1">参加用ダイレクトURL:</div>
+                <div id="share-url-text" class="text-xs font-mono text-indigo-300 break-all select-all">https://...</div>
+            </div>
+
+            <div class="flex space-x-2">
+                <button onclick="copyShareURL()" class="flex-1 bg-indigo-600 hover:bg-indigo-500 py-2.5 rounded-xl text-sm font-bold transition">URLをコピー</button>
+                <button onclick="openStudentViewPreview()" class="flex-1 bg-slate-700 hover:bg-slate-600 py-2.5 rounded-xl text-sm font-medium transition">受講生ロック画面を確認</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- リアクション種類カスタマイズモーダル -->
+    <div id="customizer-modal" class="hidden fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div class="bg-slate-800 border border-slate-700 rounded-3xl max-w-lg w-full p-6 shadow-2xl relative max-h-[90vh] flex flex-col">
+            <button onclick="openReactionCustomizerModal()" class="absolute top-4 right-4 text-slate-400 hover:text-white text-xl font-bold">&times;</button>
+            
+            <h3 class="text-xl font-bold mb-1">リアクション種類の編集</h3>
+            <p class="text-xs text-slate-400 mb-4">受講生画面のボタンと集計項目をカスタマイズできます</p>
+
+            <div class="flex-1 overflow-y-auto space-y-3 pr-1 mb-4" id="customizer-rows-container">
+                <!-- JS生成 -->
+            </div>
+
+            <div class="flex justify-between items-center pt-3 border-t border-slate-700">
+                <button onclick="resetDefaultReactions()" class="text-xs text-slate-400 hover:text-white underline">初期プリセットに戻す</button>
+                <div class="space-x-2">
+                    <button onclick="closeReactionCustomizerModal()" class="bg-slate-700 hover:bg-slate-600 px-4 py-2 rounded-xl text-sm transition">キャンセル</button>
+                    <button onclick="saveCustomReactions()" class="bg-indigo-600 hover:bg-indigo-500 px-5 py-2 rounded-xl text-sm font-bold transition">保存して反映</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 講師PIN入力モーダル -->
+    <div id="pin-modal" class="hidden fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div class="bg-slate-800 border border-slate-700 rounded-3xl max-w-xs w-full p-6 shadow-2xl text-center">
+            <h3 class="text-lg font-bold mb-1">講師画面の認証</h3>
+            <p class="text-xs text-slate-400 mb-4">PINコードを入力してください (初期: 1234)</p>
+            <input type="password" id="pin-input" maxlength="4" class="bg-slate-900 border border-slate-700 text-center text-2xl tracking-widest py-2 rounded-xl w-32 mb-4 text-white focus:outline-none focus:border-indigo-500">
+            <div class="flex space-x-2">
+                <button onclick="closePinModal()" class="flex-1 bg-slate-700 hover:bg-slate-600 py-2 rounded-xl text-sm transition">キャンセル</button>
+                <button onclick="verifyPin()" class="flex-1 bg-indigo-600 hover:bg-indigo-500 py-2 rounded-xl text-sm font-bold transition">認証</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentRole = 'lecturer';
+        let currentRoom = 'LECTURE-101';
+        let aggregationIntervalMin = 30;
+        let myTotalReactions = 0;
+        let energyLevel = 100;
+        let isFever = false;
+
+        let reactionTypes = [
+            { id: 'like', emoji: '👍', name: 'なるほど', color: 'bg-indigo-600 hover:bg-indigo-500 border-indigo-500', count: 0 },
+            { id: 'fire', emoji: '🔥', name: 'おもしろい', color: 'bg-amber-600 hover:bg-amber-500 border-amber-500', count: 0 },
+            { id: 'hard', emoji: '💦', name: 'むずかしい', color: 'bg-rose-600 hover:bg-rose-500 border-rose-500', count: 0 },
+            { id: 'hand', emoji: '✋', name: '質問あり', color: 'bg-emerald-600 hover:bg-emerald-500 border-emerald-500', count: 0 }
+        ];
+
+        let reactionHistory = [];
+        let mqttClient = null;
+
+        window.addEventListener('DOMContentLoaded', () => {
+            const urlParams = new URLSearchParams(window.location.search);
+            const roomParam = urlParams.get('room');
+            const roleParam = urlParams.get('role');
+
+            if (roomParam) currentRoom = roomParam;
+            if (roleParam === 'student') {
+                currentRole = 'student';
+                applyStudentLock();
+            }
+
+            document.getElementById('input-room-code').value = currentRoom;
+            document.getElementById('header-room-code').innerText = currentRoom;
+            document.getElementById('student-room-display').innerText = currentRoom;
+
+            renderStudentButtons();
+            initMQTT();
+            initCanvasChart();
+            setInterval(gameLoop, 1000);
+        });
+
+        function switchView(role) {
+            if (role === 'lecturer') {
+                openPinModal();
+                return;
+            }
+            setRole('student');
+        }
+
+        function setRole(role) {
+            currentRole = role;
+            const studentView = document.getElementById('view-student');
+            const lecturerView = document.getElementById('view-lecturer');
+            const tabStudent = document.getElementById('tab-student');
+            const tabLecturer = document.getElementById('tab-lecturer');
+            const lockBar = document.getElementById('student-lock-bar');
+            const mainHeader = document.getElementById('main-header');
+
+            if (role === 'student') {
+                studentView.classList.remove('hidden');
+                lecturerView.classList.add('hidden');
+                tabStudent.className = "px-4 py-1.5 rounded-lg text-sm font-medium transition bg-indigo-600 text-white shadow";
+                tabLecturer.className = "px-4 py-1.5 rounded-lg text-sm font-medium transition text-slate-400 hover:text-white";
+                lockBar.classList.remove('hidden');
+                mainHeader.classList.add('hidden');
+            } else {
+                studentView.classList.add('hidden');
+                lecturerView.classList.remove('hidden');
+                tabLecturer.className = "px-4 py-1.5 rounded-lg text-sm font-medium transition bg-indigo-600 text-white shadow";
+                tabStudent.className = "px-4 py-1.5 rounded-lg text-sm font-medium transition text-slate-400 hover:text-white";
+                lockBar.classList.add('hidden');
+                mainHeader.classList.remove('hidden');
+                drawChart();
+            }
+        }
+
+        function applyStudentLock() {
+            setRole('student');
+            document.getElementById('main-header').classList.add('hidden');
+            document.getElementById('student-lock-bar').classList.remove('hidden');
+            document.getElementById('current-room-badge').innerText = currentRoom;
+        }
+
+        function exitStudentLock() {
+            openPinModal();
+        }
+
+        function openPinModal() {
+            document.getElementById('pin-modal').classList.remove('hidden');
+            document.getElementById('pin-input').value = '';
+            document.getElementById('pin-input').focus();
+        }
+        function closePinModal() {
+            document.getElementById('pin-modal').classList.add('hidden');
+        }
+        function verifyPin() {
+            const val = document.getElementById('pin-input').value;
+            if (val === '1234') {
+                closePinModal();
+                setRole('lecturer');
+                document.getElementById('student-lock-bar').classList.add('hidden');
+                document.getElementById('main-header').classList.remove('hidden');
+            } else {
+                alert('PINコードが違います (初期設定: 1234)');
+            }
+        }
+
+        function initMQTT() {
+            try {
+                const brokerUrl = 'wss://broker.emqx.io:8084/mqtt';
+                mqttClient = mqtt.connect(brokerUrl, { clientId: 'lp_' + Math.random().toString(16).substr(2, 8) });
+
+                mqttClient.on('connect', () => {
+                    document.getElementById('sync-status').className = "inline-block w-2 h-2 rounded-full bg-emerald-400";
+                    document.getElementById('sync-status-text').innerText = "🌐 クラウド同期中";
+                    mqttClient.subscribe(`lecturepulse/${currentRoom}/reactions`);
+                    mqttClient.subscribe(`lecturepulse/${currentRoom}/config`);
+                });
+
+                mqttClient.on('error', () => {
+                    document.getElementById('sync-status').className = "inline-block w-2 h-2 rounded-full bg-amber-400";
+                    document.getElementById('sync-status-text').innerText = "⚠️ ローカル動作中";
+                });
+
+                mqttClient.on('message', (topic, payload) => {
+                    try {
+                        const data = JSON.parse(payload.toString());
+                        if (topic.endsWith('/reactions')) {
+                            receiveReaction(data.typeId, false);
+                        } else if (topic.endsWith('/config')) {
+                            reactionTypes = data.reactionTypes;
+                            renderStudentButtons();
+                        }
+                    } catch(e){}
+                });
+            } catch(e) {
+                document.getElementById('sync-status').className = "inline-block w-2 h-2 rounded-full bg-amber-400";
+                document.getElementById('sync-status-text').innerText = "⚠️ オフライン動作中";
+            }
+        }
+
+        function changeRoomCode() {
+            const code = document.getElementById('input-room-code').value.trim();
+            if (!code) return;
+            currentRoom = code;
+            document.getElementById('header-room-code').innerText = currentRoom;
+            document.getElementById('student-room-display').innerText = currentRoom;
+            if (mqttClient && mqttClient.connected) {
+                mqttClient.subscribe(`lecturepulse/${currentRoom}/reactions`);
+                mqttClient.subscribe(`lecturepulse/${currentRoom}/config`);
+            }
+            alert(`ルームを 「${currentRoom}」 に変更しました。`);
+        }
+
+        function renderStudentButtons() {
+            const grid = document.getElementById('student-buttons-grid');
+            grid.innerHTML = '';
+            reactionTypes.forEach(rt => {
+                const btn = document.createElement('button');
+                btn.className = `p-4 rounded-2xl border ${rt.color} flex flex-col items-center justify-center transition active:scale-95 shadow-lg`;
+                btn.onclick = () => sendReaction(rt.id);
+                btn.innerHTML = `
+                    <span class="text-3xl mb-1">${rt.emoji}</span>
+                    <span class="text-xs font-bold text-white">${rt.name}</span>
+                `;
+                grid.appendChild(btn);
+            });
+        }
+
+        function sendReaction(typeId) {
+            if (energyLevel < 15) return;
+            energyLevel = Math.max(0, energyLevel - 20);
+            myTotalReactions++;
+            document.getElementById('my-reaction-count').innerText = myTotalReactions;
+
+            receiveReaction(typeId, true);
+
+            if (mqttClient && mqttClient.connected) {
+                mqttClient.publish(`lecturepulse/${currentRoom}/reactions`, JSON.stringify({ typeId }));
+            }
+
+            createFloatingEmoji(typeId);
+        }
+
+        function receiveReaction(typeId) {
+            const rt = reactionTypes.find(r => r.id === typeId);
+            if (rt) rt.count++;
+
+            reactionHistory.push({ timestamp: Date.now(), typeId });
+
+            if (currentRole === 'lecturer') {
+                updateLecturerStats();
+                drawChart();
+            }
+        }
+
+        function createFloatingEmoji(typeId) {
+            const rt = reactionTypes.find(r => r.id === typeId);
+            if (!rt) return;
+            const card = document.getElementById('student-card');
+            const el = document.createElement('div');
+            el.className = 'floating-emoji';
+            el.innerText = rt.emoji;
+            el.style.left = `${Math.random() * 80 + 10}%`;
+            el.style.bottom = '20px';
+            card.appendChild(el);
+            setTimeout(() => el.remove(), 1200);
+        }
+
+        function updateLecturerStats() {
+            const total = reactionTypes.reduce((sum, r) => sum + r.count, 0);
+            document.getElementById('stat-total-reactions').innerText = total;
+
+            const now = Date.now();
+            const recent = reactionHistory.filter(h => now - h.timestamp <= 60000).length;
+            document.getElementById('stat-current-rate').innerHTML = `${recent} <span class="text-sm font-normal text-slate-400">回/分</span>`;
+            document.getElementById('stat-rate-bar').style.width = `${Math.min(100, (recent / 30) * 100)}%`;
+
+            if (recent >= 20 && !isFever) {
+                isFever = true;
+                document.getElementById('stat-fever-status').className = "px-3 py-1 rounded-full text-xs bg-gradient-to-r from-red-500 to-amber-500 text-white font-bold animate-pulse";
+                document.getElementById('stat-fever-status').innerText = "🔥 FEVER 発生中!!";
+                document.getElementById('lecturer-fever-card').classList.add('fever-active');
+            } else if (recent < 10 && isFever) {
+                isFever = false;
+                document.getElementById('stat-fever-status').className = "px-3 py-1 rounded-full text-xs bg-slate-700 text-slate-300";
+                document.getElementById('stat-fever-status').innerText = "通常モード";
+                document.getElementById('lecturer-fever-card').classList.remove('fever-active');
+            }
+        }
+
+        function setAggregationInterval(minutes) {
+            aggregationIntervalMin = minutes;
+            ['30', '60', '90', '5'].forEach(m => {
+                const btn = document.getElementById(`btn-agg-${m}`);
+                if (btn) {
+                    btn.className = (Number(m) === minutes) ? "px-3 py-1.5 rounded-lg transition bg-indigo-600 text-white font-bold" : "px-3 py-1.5 rounded-lg transition text-slate-400 hover:text-white";
+                }
+            });
+            drawChart();
+        }
+
+        let canvasCtx = null;
+        function initCanvasChart() {
+            const canvas = document.getElementById('reactionChart');
+            canvasCtx = canvas.getContext('2d');
+            resizeCanvas();
+            window.addEventListener('resize', resizeCanvas);
+            drawChart();
+        }
+
+        function resizeCanvas() {
+            const canvas = document.getElementById('reactionChart');
+            if (!canvas) return;
+            canvas.width = canvas.parentElement.clientWidth - 16;
+            canvas.height = canvas.parentElement.clientHeight - 16;
+            drawChart();
+        }
+
+        function drawChart() {
+            if (!canvasCtx) return;
+            const canvas = canvasCtx.canvas;
+            const w = canvas.width;
+            const h = canvas.height;
+
+            canvasCtx.clearRect(0, 0, w, h);
+
+            canvasCtx.strokeStyle = 'rgba(51, 65, 85, 0.4)';
+            canvasCtx.lineWidth = 1;
+            for (let i = 1; i <= 4; i++) {
+                let y = (h / 5) * i;
+                canvasCtx.beginPath();
+                canvasCtx.moveTo(40, y);
+                canvasCtx.lineTo(w - 20, y);
+                canvasCtx.stroke();
+            }
+
+            const intervalMs = aggregationIntervalMin * 60 * 1000;
+            const now = Date.now();
+            const slotCount = 6;
+            const buckets = [];
+
+            for (let i = slotCount - 1; i >= 0; i--) {
+                const endTime = now - (i * intervalMs);
+                const startTime = endTime - intervalMs;
+                const label = `${Math.round((now - endTime) / 60000)}分前`;
+                
+                const slotData = {};
+                reactionTypes.forEach(rt => { slotData[rt.id] = 0; });
+
+                reactionHistory.forEach(h => {
+                    if (h.timestamp > startTime && h.timestamp <= endTime) {
+                        if (slotData[h.typeId] !== undefined) slotData[h.typeId]++;
+                    }
+                });
+
+                buckets.push({ label, counts: slotData });
+            }
+
+            let maxVal = 5;
+            buckets.forEach(b => {
+                reactionTypes.forEach(rt => {
+                    if (b.counts[rt.id] > maxVal) maxVal = b.counts[rt.id];
+                });
+            });
+
+            const colors = ['#6366f1', '#f59e0b', '#f43f5e', '#10b981', '#38bdf8', '#a855f7'];
+            const chartW = w - 60;
+            const chartH = h - 40;
+            const stepX = chartW / (slotCount - 1 || 1);
+
+            reactionTypes.forEach((rt, idx) => {
+                const color = colors[idx % colors.length];
+                canvasCtx.strokeStyle = color;
+                canvasCtx.fillStyle = color;
+                canvasCtx.lineWidth = 2.5;
+
+                canvasCtx.beginPath();
+                buckets.forEach((b, i) => {
+                    const val = b.counts[rt.id];
+                    const x = 50 + (i * stepX);
+                    const y = (h - 30) - (val / maxVal) * (chartH - 20);
+
+                    if (i === 0) canvasCtx.moveTo(x, y);
+                    else canvasCtx.lineTo(x, y);
+                });
+                canvasCtx.stroke();
+
+                buckets.forEach((b, i) => {
+                    const val = b.counts[rt.id];
+                    const x = 50 + (i * stepX);
+                    const y = (h - 30) - (val / maxVal) * (chartH - 20);
+
+                    canvasCtx.beginPath();
+                    canvasCtx.arc(x, y, 4, 0, Math.PI * 2);
+                    canvasCtx.fill();
+                });
+            });
+
+            canvasCtx.fillStyle = '#94a3b8';
+            canvasCtx.font = '10px sans-serif';
+            buckets.forEach((b, i) => {
+                const x = 50 + (i * stepX) - 15;
+                canvasCtx.fillText(b.label, x, h - 10);
+            });
+        }
+
+        function gameLoop() {
+            if (currentRole === 'student') {
+                if (energyLevel < 100) {
+                    energyLevel = Math.min(100, energyLevel + 15);
+                    document.getElementById('energy-bar').style.width = `${energyLevel}%`;
+                    document.getElementById('energy-text').innerText = `${energyLevel}%`;
+                }
+            }
+        }
+
+        function triggerDemoMode() {
+            const types = reactionTypes.map(r => r.id);
+            for (let i = 0; i < 15; i++) {
+                setTimeout(() => {
+                    const randomType = types[Math.floor(Math.random() * types.length)];
+                    receiveReaction(randomType);
+                }, i * 200);
+            }
+        }
+
+        function openQRModal() {
+            const modal = document.getElementById('qr-modal');
+            modal.classList.remove('hidden');
+
+            const currentUrl = window.location.href.split('?')[0] + `?room=${currentRoom}&role=student`;
+            document.getElementById('share-url-text').innerText = currentUrl;
+
+            const qrContainer = document.getElementById('qrcode-container');
+            qrContainer.innerHTML = `
+                <div class="text-center p-2">
+                    <div class="text-xs font-bold text-slate-800 mb-1">📷 スマホ用リンク</div>
+                    <div class="text-[10px] text-slate-600 break-all bg-slate-200 p-2 rounded">${currentUrl}</div>
+                </div>
+            `;
+        }
+        function closeQRModal() {
+            document.getElementById('qr-modal').classList.add('hidden');
+        }
+        function copyShareURL() {
+            const url = document.getElementById('share-url-text').innerText;
+            navigator.clipboard.writeText(url);
+            alert('参加用URLをコピーしました！');
+        }
+        function openStudentViewPreview() {
+            closeQRModal();
+            applyStudentLock();
+        }
+
+        function openReactionCustomizerModal() {
+            document.getElementById('customizer-modal').classList.remove('hidden');
+            renderCustomizerRows();
+        }
+        function closeReactionCustomizerModal() {
+            document.getElementById('customizer-modal').classList.add('hidden');
+        }
+        function renderCustomizerRows() {
+            const container = document.getElementById('customizer-rows-container');
+            container.innerHTML = '';
+            reactionTypes.forEach((rt, idx) => {
+                const div = document.createElement('div');
+                div.className = "bg-slate-900 p-3 rounded-xl border border-slate-700 flex items-center space-x-3";
+                div.innerHTML = `
+                    <input type="text" value="${rt.emoji}" id="cust-emoji-${idx}" class="w-12 bg-slate-800 text-center py-1 rounded text-lg border border-slate-600">
+                    <input type="text" value="${rt.name}" id="cust-name-${idx}" class="flex-1 bg-slate-800 px-3 py-1 rounded text-sm border border-slate-600 text-white">
+                    <button onclick="removeReactionType(${idx})" class="text-rose-400 hover:text-rose-300 text-sm px-2">削除</button>
+                `;
+                container.appendChild(div);
+            });
+        }
+        function removeReactionType(idx) {
+            if (reactionTypes.length <= 2) {
+                alert('最低2つのリアクションボタンが必要です');
+                return;
+            }
+            reactionTypes.splice(idx, 1);
+            renderCustomizerRows();
+        }
+        function saveCustomReactions() {
+            reactionTypes.forEach((rt, idx) => {
+                const eInput = document.getElementById(`cust-emoji-${idx}`);
+                const nInput = document.getElementById(`cust-name-${idx}`);
+                if (eInput && nInput) {
+                    rt.emoji = eInput.value;
+                    rt.name = nInput.value;
+                }
+            });
+            renderStudentButtons();
+            closeReactionCustomizerModal();
+
+            if (mqttClient && mqttClient.connected) {
+                mqttClient.publish(`lecturepulse/${currentRoom}/config`, JSON.stringify({ reactionTypes }));
+            }
+            alert('設定を保存し、受講生画面に同期しました！');
+        }
+        function resetDefaultReactions() {
+            reactionTypes = [
+                { id: 'like', emoji: '👍', name: 'なるほど', color: 'bg-indigo-600 hover:bg-indigo-500 border-indigo-500', count: 0 },
+                { id: 'fire', emoji: '🔥', name: 'おもしろい', color: 'bg-amber-600 hover:bg-amber-500 border-amber-500', count: 0 },
+                { id: 'hard', emoji: '💦', name: 'むずかしい', color: 'bg-rose-600 hover:bg-rose-500 border-rose-500', count: 0 },
+                { id: 'hand', emoji: '✋', name: '質問あり', color: 'bg-emerald-600 hover:bg-emerald-500 border-emerald-500', count: 0 }
+            ];
+            renderCustomizerRows();
+        }
+
+        function exportCSV() {
+            let csv = "Timestamp,ReactionType,Count\n";
+            reactionTypes.forEach(rt => {
+                csv += `AllTime,${rt.name},${rt.count}\n`;
+            });
+            const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `lecture_pulse_${currentRoom}_${Date.now()}.csv`;
+            a.click();
+        }
+    </script>
+</body>
+</html>
