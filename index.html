@@ -3,713 +3,1715 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>LecturePulse - 講義リアルタイムリアクション</title>
+    <title>LecturePulse - リアルタイム講義リアクション＆分析</title>
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- MQTT.js for Realtime Sync -->
-    <script src="https://unpkg.com/mqtt@4.3.7/dist/mqtt.min.js"></script>
+    <!-- Chart.js for Time-Series Visualization -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- QRCode.js (クライアントサイド高解像度QRコード生成) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <!-- Paho MQTT (GitHub Pages / Netlify で設定不要のリアルタイム複数人同期用フォールバック) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.1.0/paho-mqtt.min.js"></script>
+    <!-- Font Awesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=Noto+Sans+JP:wght@400;500;700;900&display=swap" rel="stylesheet">
+
     <style>
+        body {
+            font-family: 'Inter', 'Noto Sans JP', sans-serif;
+            background-color: #0f172a;
+            color: #f8fafc;
+            overflow-x: hidden;
+            user-select: none;
+            /* 高解像度ディスプレイでの文字・UIぼやけ防止 */
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+            text-rendering: optimizeLegibility;
+        }
+
+        /* ゲーム風ボタンの立体スタイル */
+        .game-btn {
+            transition: transform 0.08s cubic-bezier(0.4, 0, 0.2, 1), top 0.08s cubic-bezier(0.4, 0, 0.2, 1);
+            position: relative;
+            top: 0;
+            touch-action: manipulation;
+        }
+        .game-btn:active {
+            top: 4px;
+            box-shadow: 0 0px 0 0 rgba(0,0,0,0.4) !important;
+            transform: scale(0.97);
+        }
+
+        /* フローティング絵文字アニメーション（drop-shadowを除外しGPU高解像度を維持） */
         @keyframes floatUp {
-            0% { transform: translateY(0px) scale(0.8); opacity: 1; }
-            100% { transform: translateY(-120px) scale(1.4); opacity: 0; }
+            0% {
+                transform: translate3d(0, 0, 0) scale(0.6) rotate(0deg);
+                opacity: 0;
+            }
+            15% {
+                transform: translate3d(0, -30px, 0) scale(1.15) rotate(-6deg);
+                opacity: 1;
+            }
+            50% {
+                transform: translate3d(0, -120px, 0) scale(1) rotate(6deg);
+                opacity: 0.95;
+            }
+            100% {
+                transform: translate3d(0, -260px, 0) scale(0.85) rotate(-4deg);
+                opacity: 0;
+            }
         }
-        .floating-emoji {
+
+        .floating-reaction {
             position: absolute;
-            animation: floatUp 1.2s ease-out forwards;
+            bottom: 20px;
             pointer-events: none;
-            font-size: 2rem;
+            animation: floatUp 2.1s cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards;
+            z-index: 30;
+            text-shadow: 0 4px 8px rgba(0, 0, 0, 0.45);
         }
-        @keyframes pulseGlow {
-            0%, 100% { box-shadow: 0 0 15px rgba(239, 68, 68, 0.4); }
-            50% { box-shadow: 0 0 35px rgba(239, 68, 68, 0.8); }
+
+        /* ライブコメントの横スクロール弾幕アニメーション */
+        @keyframes slideComment {
+            0% {
+                transform: translate3d(100%, 0, 0);
+                opacity: 0;
+            }
+            5% {
+                opacity: 1;
+            }
+            90% {
+                opacity: 1;
+            }
+            100% {
+                transform: translate3d(-120%, 0, 0);
+                opacity: 0;
+            }
         }
-        .fever-active {
-            animation: pulseGlow 1s infinite;
+
+        .floating-comment {
+            position: absolute;
+            right: 0;
+            white-space: nowrap;
+            pointer-events: none;
+            animation: slideComment 7.5s linear forwards;
+            z-index: 25;
+        }
+
+        /* コンボポップアニメーション */
+        @keyframes comboPop {
+            0% { transform: scale(0.85); }
+            50% { transform: scale(1.2); }
+            100% { transform: scale(1); }
+        }
+        .combo-animate {
+            animation: comboPop 0.18s ease-out;
+        }
+
+        /* フィーバー時の背景エフェクト */
+        @keyframes feverPulse {
+            0%, 100% { box-shadow: inset 0 0 30px rgba(245, 158, 11, 0.15); }
+            50% { box-shadow: inset 0 0 60px rgba(236, 72, 153, 0.35); }
+        }
+        .fever-mode {
+            animation: feverPulse 1.5s infinite;
+            border-color: #f59e0b !important;
+        }
+
+        /* QRコード画像のシャープ表示 */
+        #qrCodeContainer img, #qrCodeContainer canvas {
+            margin: 0 auto;
+            image-rendering: -webkit-optimize-contrast;
+            image-rendering: crisp-edges;
+            border-radius: 8px;
+        }
+
+        /* カスタムスクロールバー */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #1e293b;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #475569;
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #64748b;
         }
     </style>
 </head>
-<body class="bg-slate-900 text-slate-100 min-h-screen flex flex-col font-sans">
+<body class="min-h-screen flex flex-col bg-gradient-to-br from-slate-900 via-slate-800 to-indigo-950">
 
-    <!-- 受講生ロック時の上部バー -->
-    <div id="student-lock-bar" class="hidden bg-indigo-600 text-white px-4 py-2 text-sm flex justify-between items-center shadow-md">
-        <span>🔒 受講生モードで参加中 (ルーム: <span id="current-room-badge" class="font-bold">LECTURE-101</span>)</span>
-        <button onclick="exitStudentLock()" class="bg-indigo-800 hover:bg-indigo-900 px-3 py-1 rounded text-xs transition">講師画面のロック解除 (PIN必要)</button>
-    </div>
-
-    <!-- 通常ヘッダー -->
-    <header id="main-header" class="bg-slate-800 border-b border-slate-700 px-4 py-3 flex flex-wrap justify-between items-center gap-3">
-        <div class="flex items-center space-x-3">
-            <div class="bg-gradient-to-r from-indigo-500 to-purple-500 p-2 rounded-xl text-white font-black text-xl shadow-lg">LP</div>
-            <div>
-                <h1 class="font-bold text-lg leading-tight">LecturePulse</h1>
-                <div class="flex items-center space-x-2 text-xs text-slate-400">
-                    <span id="sync-status" class="inline-block w-2 h-2 rounded-full bg-emerald-400"></span>
-                    <span id="sync-status-text">🌐 クラウド同期中</span>
-                    <span class="text-slate-600">|</span>
-                    <span>ルーム: <strong id="header-room-code" class="text-indigo-300">LECTURE-101</strong></span>
+    <!-- ナビゲーションヘッダー -->
+    <header class="border-b border-slate-700/80 bg-slate-900/95 sticky top-0 z-40">
+        <div class="max-w-7xl mx-auto px-4 py-3 flex flex-wrap items-center justify-between gap-3">
+            <!-- ロゴ＆タイトル -->
+            <div class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-indigo-500 to-purple-500 flex items-center justify-center shadow-lg shadow-indigo-500/30">
+                    <i class="fa-solid fa-bolt text-white text-xl"></i>
+                </div>
+                <div>
+                    <div class="flex items-center gap-2">
+                        <h1 class="text-lg md:text-xl font-black tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-white via-indigo-200 to-indigo-400">
+                            LecturePulse
+                        </h1>
+                        <span id="syncStatusBadge" class="text-[11px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 flex items-center gap-1">
+                            <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                            LIVE同期中
+                        </span>
+                    </div>
+                    <p class="text-xs text-slate-400 hidden sm:block">大学講義リアルタイム・リアクション＆コメント推移システム</p>
                 </div>
             </div>
-        </div>
 
-        <div class="flex items-center space-x-2">
-            <div id="nav-tabs" class="bg-slate-900 p-1 rounded-xl flex space-x-1 border border-slate-700">
-                <button id="tab-student" onclick="switchView('student')" class="px-4 py-1.5 rounded-lg text-sm font-medium transition bg-indigo-600 text-white shadow">受講生画面</button>
-                <button id="tab-lecturer" onclick="switchView('lecturer')" class="px-4 py-1.5 rounded-lg text-sm font-medium transition text-slate-400 hover:text-white">講師・スクリーン画面</button>
+            <!-- ルーム（講義コード）設定＆コントロール -->
+            <div class="flex flex-wrap items-center gap-2">
+                <!-- 講義ルーム切り替え -->
+                <div class="flex items-center bg-slate-800 border border-slate-700 rounded-xl px-2.5 py-1.5">
+                    <i class="fa-solid fa-chalkboard-user text-indigo-400 text-xs mr-1.5"></i>
+                    <span class="text-xs text-slate-400 mr-1.5 hidden sm:inline">講義:</span>
+                    <input id="roomInput" type="text" value="LEC-101" maxlength="15"
+                        class="bg-transparent text-sm font-bold text-white w-20 sm:w-24 focus:outline-none border-b border-dashed border-slate-500 focus:border-indigo-400 uppercase"
+                        title="同じ講義コードを入力した人とリアルタイム共有されます">
+                    <button id="changeRoomBtn" class="ml-1.5 text-xs bg-indigo-600 hover:bg-indigo-500 text-white font-semibold px-2.5 py-1 rounded-lg transition">
+                        入室
+                    </button>
+                </div>
+
+                <!-- QRコード共有ボタン（新規追加・確実に生成） -->
+                <button id="openQrModalBtn" class="flex items-center gap-1.5 text-xs font-bold px-3 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white shadow-md shadow-indigo-600/20 transition" title="学生に共有するためのQRコードを表示します">
+                    <i class="fa-solid fa-qrcode text-sm"></i>
+                    <span>QRコード</span>
+                </button>
+
+                <!-- 効果音トグル -->
+                <button id="soundToggleBtn" class="p-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition" title="効果音のON/OFF">
+                    <i id="soundIcon" class="fa-solid fa-volume-high text-sm text-emerald-400"></i>
+                </button>
+
+                <!-- シミュレーション（デモ用ボット）ボタン -->
+                <button id="simBotBtn" class="flex items-center gap-1.5 text-xs font-bold px-3 py-2.5 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 transition" title="複数人の学生からのリアクションとコメントを擬似体験します">
+                    <i class="fa-solid fa-robot"></i>
+                    <span id="simBotText" class="hidden md:inline">模擬アクセス: OFF</span>
+                </button>
+
+                <!-- GitHub公開ガイドボタン -->
+                <button id="githubGuideBtn" class="flex items-center gap-1.5 text-xs font-bold px-3 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-white border border-slate-600 transition">
+                    <i class="fa-brands fa-github text-base"></i>
+                    <span class="hidden sm:inline">サイト化設定</span>
+                </button>
             </div>
-            <button id="btn-share-qr" onclick="openQRModal()" class="bg-slate-700 hover:bg-slate-600 px-3 py-1.5 rounded-xl text-sm font-medium transition flex items-center space-x-1">
-                <span>🔗 受講生に共有 (QR)</span>
-            </button>
         </div>
     </header>
 
     <!-- メインコンテンツ -->
-    <main class="flex-1 max-w-6xl w-full mx-auto p-4 sm:p-6 flex flex-col">
-
-        <!-- ==================== 受講生画面 ==================== -->
-        <div id="view-student" class="flex-1 flex flex-col max-w-md mx-auto w-full justify-center">
-            <div class="bg-slate-800/80 backdrop-blur border border-slate-700 rounded-2xl p-6 shadow-2xl relative overflow-hidden" id="student-card">
-                
-                <div id="student-fever-banner" class="hidden absolute top-0 left-0 right-0 bg-gradient-to-r from-red-500 via-orange-500 to-amber-500 text-white text-center py-1 text-xs font-black tracking-widest uppercase animate-pulse">
-                    🔥 講義熱気MAX フィーバー中!! 🔥
-                </div>
-
-                <div class="text-center mb-6 mt-2">
-                    <span class="bg-indigo-900/60 text-indigo-300 text-xs px-3 py-1 rounded-full border border-indigo-700/50">講義リアクション</span>
-                    <p class="text-sm text-slate-300 mt-1">今の気持ちや理解度をタップして送信しよう</p>
-                </div>
-
-                <div id="student-buttons-grid" class="grid grid-cols-2 gap-3 mb-6">
-                    <!-- 動的生成 -->
-                </div>
-
-                <div class="space-y-2">
-                    <div class="flex justify-between text-xs text-slate-400">
-                        <span>連打エネルギー</span>
-                        <span id="energy-text">100%</span>
-                    </div>
-                    <div class="w-full bg-slate-700 h-2 rounded-full overflow-hidden">
-                        <div id="energy-bar" class="bg-gradient-to-r from-indigo-500 to-emerald-400 h-full w-full transition-all duration-150"></div>
-                    </div>
-                </div>
-
-                <div class="mt-6 pt-4 border-t border-slate-700 flex justify-between items-center text-sm text-slate-400">
-                    <span>あなたの送信数: <strong id="my-reaction-count" class="text-white">0</strong> 回</span>
-                    <span class="text-xs bg-slate-700 px-2.5 py-1 rounded-lg">ルーム: <span id="student-room-display" class="text-indigo-300">LECTURE-101</span></span>
-                </div>
-            </div>
-        </div>
-
-        <!-- ==================== 講師・スクリーン画面 ==================== -->
-        <div id="view-lecturer" class="hidden flex-1 flex flex-col space-y-6">
+    <main class="flex-1 max-w-7xl w-full mx-auto px-4 py-5 grid grid-cols-1 lg:grid-cols-12 gap-6">
+        
+        <!-- 左カラム：リアクション・ゲームステージ＆コメント投稿（5カラム幅） -->
+        <section class="lg:col-span-5 flex flex-col gap-5">
             
-            <div class="bg-slate-800 border border-slate-700 rounded-2xl p-4 flex flex-wrap justify-between items-center gap-4 shadow-lg">
-                <div class="flex items-center space-x-4">
-                    <div>
-                        <label class="block text-xs text-slate-400 mb-1">講義コード / ルーム名</label>
-                        <div class="flex items-center space-x-2">
-                            <input type="text" id="input-room-code" value="LECTURE-101" class="bg-slate-900 border border-slate-700 px-3 py-1.5 rounded-lg text-sm font-bold text-indigo-300 w-36 focus:outline-none focus:border-indigo-500">
-                            <button onclick="changeRoomCode()" class="bg-indigo-600 hover:bg-indigo-500 px-3 py-1.5 rounded-lg text-xs font-medium transition">変更</button>
-                        </div>
-                    </div>
-                    <div>
-                        <label class="block text-xs text-slate-400 mb-1">現在の接続状況</label>
-                        <div class="flex items-center space-x-2 py-1.5">
-                            <span class="flex h-2.5 w-2.5 relative">
-                                <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                                <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
+            <!-- ライブ・リアクション画面（フローティングステージ） -->
+            <div id="liveStage" class="relative bg-slate-900 border-2 border-slate-700/80 rounded-2xl p-5 flex flex-col justify-between min-h-[320px] sm:min-h-[350px] overflow-hidden shadow-2xl transition-colors duration-500">
+                
+                <!-- 上部ステータス：盛り上がりのボルテージ（Fever Gauge） -->
+                <div class="relative z-20">
+                    <div class="flex items-center justify-between mb-1.5">
+                        <div class="flex items-center gap-2">
+                            <span id="feverBadge" class="text-xs font-extrabold uppercase tracking-wider px-2.5 py-0.5 rounded-md bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
+                                <i class="fa-solid fa-fire-flame-curved mr-1"></i>講義の盛り上がり度
                             </span>
-                            <span id="active-users-count" class="text-sm font-bold text-emerald-400">クラウド接続中</span>
+                            <span id="rpmDisplay" class="text-xs text-slate-400 font-mono">0 react/10s</span>
+                        </div>
+                        <!-- コンボカウンター -->
+                        <div id="comboContainer" class="opacity-0 transition-opacity duration-300 flex items-center gap-1 bg-gradient-to-r from-amber-500 to-pink-500 text-white text-xs font-black px-2.5 py-0.5 rounded-full shadow-lg">
+                            <span id="comboCount">0</span>
+                            <span>COMBO!</span>
                         </div>
                     </div>
+                    <!-- ボルテージプログレスバー -->
+                    <div class="w-full h-3 bg-slate-800 rounded-full overflow-hidden p-0.5 border border-slate-700">
+                        <div id="voltageBar" class="h-full w-0 rounded-full bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 transition-all duration-300"></div>
+                    </div>
                 </div>
 
-                <div class="flex items-center space-x-2">
-                    <button onclick="triggerDemoMode()" class="bg-amber-600 hover:bg-amber-500 px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center space-x-1 shadow">
-                        <span>⚡ 1人テスト用デモ（自動送信）</span>
+                <!-- 中央メッセージ＆フローティングエリア -->
+                <div class="my-auto text-center relative z-10 pointer-events-none py-4">
+                    <div id="stageCenterIcon" class="text-5xl mb-2 transition-transform duration-150">🎓</div>
+                    <h2 id="stageStatusTitle" class="text-base sm:text-lg font-bold text-slate-100">ボタンを押して講義にリアクション！</h2>
+                    <p id="stageStatusSub" class="text-xs text-slate-400 mt-1">何回でも連打OK！コメントも画面に流れます</p>
+                </div>
+
+                <!-- フローティング絵文字＆流れるコメントが生成されるコンテナ -->
+                <div id="floatingContainer" class="absolute inset-0 overflow-hidden pointer-events-none z-20"></div>
+
+                <!-- 下部：現在のルームのリアルタイム累計カウンター -->
+                <div class="relative z-20 grid grid-cols-4 gap-2 pt-3 border-t border-slate-800 bg-slate-900/90 rounded-xl p-2">
+                    <div class="text-center">
+                        <div class="text-xs text-emerald-400 font-bold">👍 いいね</div>
+                        <div id="count-like" class="text-lg font-black text-white">0</div>
+                    </div>
+                    <div class="text-center">
+                        <div class="text-xs text-amber-400 font-bold">💡 なるほど</div>
+                        <div id="count-insight" class="text-lg font-black text-white">0</div>
+                    </div>
+                    <div class="text-center">
+                        <div class="text-xs text-rose-400 font-bold">🤔 Bad/難</div>
+                        <div id="count-bad" class="text-lg font-black text-white">0</div>
+                    </div>
+                    <div class="text-center">
+                        <div class="text-xs text-sky-400 font-bold">❓ 質問/速い</div>
+                        <div id="count-question" class="text-lg font-black text-white">0</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ゲーム風リアクション・ボタンパッド（無制限連打対応） -->
+            <div class="bg-slate-900 border border-slate-700/80 rounded-2xl p-4 shadow-xl">
+                <div class="flex items-center justify-between mb-3">
+                    <span class="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
+                        <i class="fa-solid fa-gamepad text-indigo-400"></i> リアクション・パッド（回数無制限・キー1〜4対応）
+                    </span>
+                    <span id="mySentCountBadge" class="text-[11px] font-bold px-2 py-0.5 rounded bg-slate-800 text-indigo-300 border border-slate-700">
+                        自分の送信数: 0回
+                    </span>
+                </div>
+
+                <div class="grid grid-cols-2 gap-3.5">
+                    <!-- 1: いいね！ (Positive) -->
+                    <button type="button" data-type="like" class="reaction-btn game-btn group flex flex-col items-center justify-center p-4 rounded-2xl bg-gradient-to-b from-emerald-500 to-emerald-600 hover:from-emerald-400 hover:to-emerald-500 text-white border-t border-emerald-300/40" style="box-shadow: 0 5px 0 0 #065f46;">
+                        <div class="flex items-center gap-2 mb-1">
+                            <span class="text-3xl group-hover:scale-110 transition-transform">👍</span>
+                            <span class="text-lg font-black tracking-wide">いいね！</span>
+                        </div>
+                        <span class="text-[11px] text-emerald-100 font-medium">理解できた・賛成 [Key: 1]</span>
                     </button>
-                    <button onclick="openReactionCustomizerModal()" class="bg-slate-700 hover:bg-slate-600 px-3.5 py-2 rounded-xl text-xs font-medium transition">
-                        ⚙️ リアクション種類を変更・編集
+
+                    <!-- 2: なるほど！ (Insight) -->
+                    <button type="button" data-type="insight" class="reaction-btn game-btn group flex flex-col items-center justify-center p-4 rounded-2xl bg-gradient-to-b from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-white border-t border-amber-300/40" style="box-shadow: 0 5px 0 0 #92400e;">
+                        <div class="flex items-center gap-2 mb-1">
+                            <span class="text-3xl group-hover:scale-110 transition-transform">💡</span>
+                            <span class="text-lg font-black tracking-wide">なるほど</span>
+                        </div>
+                        <span class="text-[11px] text-amber-100 font-medium">面白い・重要発見 [Key: 2]</span>
+                    </button>
+
+                    <!-- 3: Bad / むずかしい (Negative / Confused) -->
+                    <button type="button" data-type="bad" class="reaction-btn game-btn group flex flex-col items-center justify-center p-4 rounded-2xl bg-gradient-to-b from-rose-500 to-rose-600 hover:from-rose-400 hover:to-rose-500 text-white border-t border-rose-300/40" style="box-shadow: 0 5px 0 0 #9f1239;">
+                        <div class="flex items-center gap-2 mb-1">
+                            <span class="text-3xl group-hover:scale-110 transition-transform">🤔</span>
+                            <span class="text-lg font-black tracking-wide">Bad / 難</span>
+                        </div>
+                        <span class="text-[11px] text-rose-100 font-medium">わからない・迷子 [Key: 3]</span>
+                    </button>
+
+                    <!-- 4: 待って / 質問 (Speed / Question) -->
+                    <button type="button" data-type="question" class="reaction-btn game-btn group flex flex-col items-center justify-center p-4 rounded-2xl bg-gradient-to-b from-sky-500 to-sky-600 hover:from-sky-400 hover:to-sky-500 text-white border-t border-sky-300/40" style="box-shadow: 0 5px 0 0 #075985;">
+                        <div class="flex items-center gap-2 mb-1">
+                            <span class="text-3xl group-hover:scale-110 transition-transform">❓</span>
+                            <span class="text-lg font-black tracking-wide">少し速い/疑問</span>
+                        </div>
+                        <span class="text-[11px] text-sky-100 font-medium">もう一回説明して [Key: 4]</span>
                     </button>
                 </div>
             </div>
 
-            <!-- メトリクス -->
-            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div class="bg-slate-800 border border-slate-700 rounded-2xl p-4 shadow flex flex-col justify-between">
-                    <div class="text-xs text-slate-400">総リアクション数 (本日の講義)</div>
-                    <div class="text-3xl font-black text-indigo-400 my-2" id="stat-total-reactions">0</div>
-                    <div class="text-xs text-emerald-400">▲ リアルタイム集計中</div>
+            <!-- 新規追加：ライブコメント・質問投稿フォーム -->
+            <div class="bg-slate-900 border border-slate-700/80 rounded-2xl p-4 shadow-xl">
+                <div class="flex items-center justify-between mb-2.5">
+                    <span class="text-xs font-bold text-slate-300 flex items-center gap-1.5">
+                        <i class="fa-solid fa-comment-dots text-indigo-400"></i> 講義へコメント・質問を送る（匿名）
+                    </span>
+                    <span id="userIdDisplay" class="text-[11px] text-slate-500 font-mono truncate max-w-[140px]">ID: connecting...</span>
                 </div>
-                <div class="bg-slate-800 border border-slate-700 rounded-2xl p-4 shadow flex flex-col justify-between">
-                    <div class="text-xs text-slate-400">現在の盛り上がり (直近1分)</div>
-                    <div class="text-3xl font-black text-amber-400 my-2" id="stat-current-rate">0 <span class="text-sm font-normal text-slate-400">回/分</span></div>
-                    <div class="w-full bg-slate-700 h-2 rounded-full overflow-hidden">
-                        <div id="stat-rate-bar" class="bg-amber-400 h-full w-0 transition-all duration-300"></div>
+                <form id="commentForm" class="flex flex-col gap-2.5">
+                    <div class="flex gap-2">
+                        <select id="commentTagSelect" class="bg-slate-800 border border-slate-700 text-xs font-bold text-white rounded-xl px-2.5 py-2.5 focus:outline-none focus:border-indigo-500">
+                            <option value="comment">💬 つぶやき</option>
+                            <option value="question">❓ 質問</option>
+                            <option value="insight">💡 気づき</option>
+                            <option value="help">🆘 ヘルプ</option>
+                        </select>
+                        <input id="commentInput" type="text" maxlength="80" placeholder="質問や感想を入力（例：さっきの式の意味をもう一度知りたいです）"
+                            class="flex-1 bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500">
                     </div>
-                </div>
-                <div class="bg-slate-800 border border-slate-700 rounded-2xl p-4 shadow flex flex-col justify-between" id="lecturer-fever-card">
-                    <div class="text-xs text-slate-400">講義ステータス</div>
-                    <div class="text-xl font-black text-white my-2">
-                        <span id="stat-fever-status" class="px-3 py-1 rounded-full text-xs bg-slate-700 text-slate-300">通常モード</span>
+                    <div class="flex items-center justify-between">
+                        <label class="flex items-center gap-1.5 text-xs text-slate-400 cursor-pointer">
+                            <input id="danmakuToggle" type="checkbox" checked class="rounded bg-slate-800 border-slate-600 text-indigo-500 focus:ring-0">
+                            <span>ステージ画面にコメントを流す</span>
+                        </label>
+                        <button type="submit" class="bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white text-xs font-bold px-4 py-2 rounded-xl shadow-md shadow-indigo-600/30 transition flex items-center gap-1.5">
+                            <i class="fa-solid fa-paper-plane"></i> コメント送信
+                        </button>
                     </div>
-                    <div class="text-xs text-slate-400">受講生の熱量が上がるとFEVER発動</div>
-                </div>
+                </form>
             </div>
 
-            <!-- グラフエリア -->
-            <div class="bg-slate-800 border border-slate-700 rounded-2xl p-6 shadow-xl flex-1 flex flex-col">
-                <div class="flex flex-wrap justify-between items-center gap-4 mb-4">
+        </section>
+
+        <!-- 右カラム：単位時間あたりの集計＆リアルタイム推移グラフ＆コメント一覧（7カラム幅） -->
+        <section class="lg:col-span-7 flex flex-col gap-5">
+            
+            <!-- 推移グラフカード -->
+            <div class="bg-slate-900 border border-slate-700/80 rounded-2xl p-5 shadow-2xl flex flex-col justify-between">
+                
+                <!-- グラフヘッダー＆単位時間切り替え -->
+                <div class="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-slate-800">
                     <div>
-                        <h2 class="font-bold text-lg">リアクション推移グラフ</h2>
-                        <p class="text-xs text-slate-400">大学の講義時間スケールに合わせた集計</p>
+                        <h2 class="text-base sm:text-lg font-bold text-white flex items-center gap-2">
+                            <i class="fa-solid fa-chart-line text-indigo-400"></i>
+                            単位時間あたりのリアクション推移
+                        </h2>
+                        <p class="text-xs text-slate-400">講義の時間経過に伴う「理解度」や「疑問点」の波を高精細グラフで可視化します</p>
                     </div>
-                    
-                    <div class="flex flex-wrap items-center gap-2">
-                        <div class="bg-slate-900 p-1 rounded-xl flex space-x-1 border border-slate-700 text-xs">
-                            <span class="px-2 py-1.5 text-slate-400 font-medium self-center">時間集計:</span>
-                            <button onclick="setAggregationInterval(30)" id="btn-agg-30" class="px-3 py-1.5 rounded-lg transition bg-indigo-600 text-white font-bold">30分</button>
-                            <button onclick="setAggregationInterval(60)" id="btn-agg-60" class="px-3 py-1.5 rounded-lg transition text-slate-400 hover:text-white">1時間</button>
-                            <button onclick="setAggregationInterval(90)" id="btn-agg-90" class="px-3 py-1.5 rounded-lg transition text-slate-400 hover:text-white">1時間半</button>
-                            <button onclick="setAggregationInterval(5)" id="btn-agg-5" class="px-3 py-1.5 rounded-lg transition text-slate-400 hover:text-white">5分</button>
-                        </div>
 
-                        <button onclick="exportCSV()" class="bg-slate-700 hover:bg-slate-600 px-3 py-2 rounded-xl text-xs font-medium transition flex items-center space-x-1">
-                            <span>📥 CSV出力</span>
+                    <!-- 集計単位時間セレクター -->
+                    <div class="flex items-center bg-slate-800 p-1 rounded-xl border border-slate-700">
+                        <button type="button" data-bucket="10" class="bucket-btn px-3 py-1.5 rounded-lg text-xs font-bold bg-indigo-600 text-white transition">
+                            10秒単位 <span class="hidden sm:inline text-[10px] opacity-80">(直近3分)</span>
+                        </button>
+                        <button type="button" data-bucket="60" class="bucket-btn px-3 py-1.5 rounded-lg text-xs font-bold text-slate-400 hover:text-white transition">
+                            1分単位 <span class="hidden sm:inline text-[10px] opacity-80">(直近20分)</span>
+                        </button>
+                        <button type="button" data-bucket="300" class="bucket-btn px-3 py-1.5 rounded-lg text-xs font-bold text-slate-400 hover:text-white transition">
+                            5分単位 <span class="hidden sm:inline text-[10px] opacity-80">(90分講義)</span>
                         </button>
                     </div>
                 </div>
 
-                <div class="relative w-full h-72 sm:h-96 bg-slate-900/50 rounded-xl border border-slate-700/60 p-2 flex items-center justify-center">
-                    <canvas id="reactionChart" class="w-full h-full"></canvas>
+                <!-- Chart.js キャンバスラッパー -->
+                <div class="relative w-full h-[250px] sm:h-[280px] my-3">
+                    <canvas id="timelineChart"></canvas>
+                </div>
+
+                <!-- 講義インサイト＆ピークタイム自動分析 -->
+                <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-3 border-t border-slate-800">
+                    <!-- 理解度バランス -->
+                    <div class="bg-slate-800/70 border border-slate-700/70 rounded-xl p-3 flex items-center gap-3">
+                        <div class="w-10 h-10 rounded-lg bg-emerald-500/20 text-emerald-400 flex items-center justify-center text-lg font-bold">
+                            <i class="fa-solid fa-face-smile"></i>
+                        </div>
+                        <div>
+                            <div class="text-[11px] text-slate-400">ポジティブ反応率</div>
+                            <div id="positiveRatioText" class="text-base font-black text-emerald-300">-- %</div>
+                        </div>
+                    </div>
+
+                    <!-- 最も盛り上がった時間 -->
+                    <div class="bg-slate-800/70 border border-slate-700/70 rounded-xl p-3 flex items-center gap-3">
+                        <div class="w-10 h-10 rounded-lg bg-amber-500/20 text-amber-400 flex items-center justify-center text-lg font-bold">
+                            <i class="fa-solid fa-crown"></i>
+                        </div>
+                        <div>
+                            <div class="text-[11px] text-slate-400">いいね・納得ピーク</div>
+                            <div id="positivePeakTime" class="text-sm font-bold text-white">記録なし</div>
+                        </div>
+                    </div>
+
+                    <!-- 最も「むずかしい/Bad」が多かった時間 -->
+                    <div class="bg-slate-800/70 border border-slate-700/70 rounded-xl p-3 flex items-center gap-3">
+                        <div class="w-10 h-10 rounded-lg bg-rose-500/20 text-rose-400 flex items-center justify-center text-lg font-bold">
+                            <i class="fa-solid fa-triangle-exclamation"></i>
+                        </div>
+                        <div>
+                            <div class="text-[11px] text-slate-400">Bad・疑問ピーク (要復習)</div>
+                            <div id="negativePeakTime" class="text-sm font-bold text-white">記録なし</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- データ管理・CSV出力フッター -->
+                <div class="flex flex-wrap items-center justify-between gap-2 mt-4 pt-3 border-t border-slate-800/80">
+                    <div class="text-xs text-slate-400 flex items-center gap-2">
+                        <span>総リアクション: <strong id="totalReactionsCount" class="text-white">0</strong> 件</span>
+                        <span class="text-slate-600">|</span>
+                        <span>形式:</span>
+                        <button type="button" id="toggleChartTypeBtn" class="text-indigo-400 hover:text-indigo-300 font-semibold underline">
+                            折れ線グラフ
+                        </button>
+                    </div>
+
+                    <div class="flex items-center gap-2">
+                        <button type="button" id="exportCsvBtn" class="text-xs bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold px-3 py-1.5 rounded-lg border border-slate-700 transition flex items-center gap-1.5">
+                            <i class="fa-solid fa-file-csv text-emerald-400"></i> CSV出力
+                        </button>
+                        <button type="button" id="clearRoomDataBtn" class="text-xs bg-rose-950/60 hover:bg-rose-900/80 text-rose-300 font-semibold px-3 py-1.5 rounded-lg border border-rose-800/50 transition flex items-center gap-1.5">
+                            <i class="fa-solid fa-trash-can"></i> 記録リセット
+                        </button>
+                    </div>
                 </div>
             </div>
 
-        </div>
+            <!-- 新規追加：リアルタイム・コメント＆質問タイムライン一覧 -->
+            <div class="bg-slate-900 border border-slate-700/80 rounded-2xl p-5 shadow-2xl flex-1 flex flex-col">
+                <div class="flex items-center justify-between pb-3 border-b border-slate-800">
+                    <div class="flex items-center gap-2">
+                        <h3 class="text-base font-bold text-white flex items-center gap-2">
+                            <i class="fa-solid fa-comments text-indigo-400"></i>
+                            みんなのコメント・質問ログ
+                        </h3>
+                        <span id="commentCountBadge" class="text-xs font-bold px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
+                            0件
+                        </span>
+                    </div>
+
+                    <!-- フィルタボタン -->
+                    <div class="flex items-center gap-1 bg-slate-800 p-1 rounded-lg border border-slate-700 text-xs">
+                        <button type="button" data-filter="all" class="comment-filter-btn px-2.5 py-1 rounded bg-indigo-600 text-white font-bold transition">すべて</button>
+                        <button type="button" data-filter="question" class="comment-filter-btn px-2.5 py-1 rounded text-slate-400 hover:text-white font-bold transition">❓ 質問のみ</button>
+                    </div>
+                </div>
+
+                <!-- コメントリスト表示領域 -->
+                <div id="commentListContainer" class="mt-3 space-y-2.5 max-h-[240px] overflow-y-auto pr-1 flex-1">
+                    <div class="text-center py-8 text-slate-500 text-xs">
+                        まだコメントはありません。左下のフォームから最初のコメントや質問を送ってみましょう！
+                    </div>
+                </div>
+            </div>
+
+        </section>
 
     </main>
 
-    <!-- QR共有モーダル -->
-    <div id="qr-modal" class="hidden fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-        <div class="bg-slate-800 border border-slate-700 rounded-3xl max-w-md w-full p-6 shadow-2xl text-center relative">
-            <button onclick="closeQRModal()" class="absolute top-4 right-4 text-slate-400 hover:text-white text-xl font-bold">&times;</button>
-            
-            <h3 class="text-xl font-bold mb-1">受講生用 参加QRコード</h3>
-            <p class="text-xs text-slate-400 mb-4">スマホのカメラでスキャンしてリアクション画面を開けます</p>
+    <!-- トースト通知（アラート代替） -->
+    <div id="toastNotification" class="fixed bottom-5 right-5 z-50 transform translate-y-20 opacity-0 transition-all duration-300 pointer-events-none bg-slate-800 border border-indigo-500/50 text-white px-4 py-3 rounded-xl shadow-2xl flex items-center gap-3">
+        <i id="toastIcon" class="fa-solid fa-circle-info text-indigo-400"></i>
+        <span id="toastMessage" class="text-xs sm:text-sm font-semibold">メッセージ</span>
+    </div>
 
-            <div class="bg-white p-4 rounded-2xl inline-block shadow-inner mb-4">
-                <div id="qrcode-container" class="w-48 h-48 flex items-center justify-center bg-slate-100 rounded-lg text-slate-900">
-                    <!-- QR描画 -->
+    <!-- 新規追加：QRコード表示＆URL共有モーダル -->
+    <div id="qrModal" class="fixed inset-0 z-50 bg-black/75 hidden items-center justify-center p-4">
+        <div class="bg-slate-900 border border-slate-700 rounded-2xl max-w-md w-full p-6 shadow-2xl text-center">
+            <div class="flex items-center justify-between pb-3 border-b border-slate-800">
+                <h3 class="text-lg font-black text-white flex items-center gap-2">
+                    <i class="fa-solid fa-qrcode text-indigo-400"></i>
+                    講義ルーム参加用 QRコード
+                </h3>
+                <button type="button" id="closeQrModalBtn" class="text-slate-400 hover:text-white p-1">
+                    <i class="fa-solid fa-xmark text-xl"></i>
+                </button>
+            </div>
+
+            <div class="my-4">
+                <p class="text-xs text-slate-300 mb-3">
+                    スクリーンに投影して学生のスマホで読み取ると、講義コード <strong id="qrRoomLabel" class="text-indigo-400 font-black">LEC-101</strong> に自動で入室できます。
+                </p>
+
+                <!-- 白背景のQRコード描画ボックス -->
+                <div class="bg-white p-4 rounded-2xl inline-block shadow-inner mx-auto">
+                    <div id="qrCodeContainer" class="w-[220px] h-[220px] flex items-center justify-center"></div>
+                </div>
+
+                <!-- 共有URLコピー欄 -->
+                <div class="mt-4 text-left">
+                    <label class="text-[11px] font-bold text-slate-400 block mb-1">参加用ダイレクトURL（変更してQR再生成も可能）:</label>
+                    <div class="flex gap-2">
+                        <input id="shareUrlInput" type="text"
+                            class="flex-1 bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-200 font-mono focus:outline-none focus:border-indigo-500">
+                        <button type="button" id="copyShareUrlBtn" class="bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold px-3 py-2 rounded-xl transition flex items-center gap-1">
+                            <i class="fa-solid fa-copy"></i> コピー
+                        </button>
+                    </div>
                 </div>
             </div>
 
-            <div class="bg-slate-900 p-3 rounded-xl border border-slate-700 mb-4 text-left">
-                <div class="text-xs text-slate-400 mb-1">参加用ダイレクトURL:</div>
-                <div id="share-url-text" class="text-xs font-mono text-indigo-300 break-all select-all">https://...</div>
-            </div>
-
-            <div class="flex space-x-2">
-                <button onclick="copyShareURL()" class="flex-1 bg-indigo-600 hover:bg-indigo-500 py-2.5 rounded-xl text-sm font-bold transition">URLをコピー</button>
-                <button onclick="openStudentViewPreview()" class="flex-1 bg-slate-700 hover:bg-slate-600 py-2.5 rounded-xl text-sm font-medium transition">受講生ロック画面を確認</button>
+            <div class="flex justify-between items-center pt-3 border-t border-slate-800">
+                <button type="button" id="downloadQrBtn" class="text-xs bg-slate-800 hover:bg-slate-700 text-emerald-300 font-bold px-3.5 py-2 rounded-xl border border-slate-700 transition flex items-center gap-1.5">
+                    <i class="fa-solid fa-download"></i> QR画像を保存
+                </button>
+                <button type="button" id="closeQrModalBtnBottom" class="px-5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-white text-sm font-bold">
+                    閉じる
+                </button>
             </div>
         </div>
     </div>
 
-    <!-- リアクション種類カスタマイズモーダル -->
-    <div id="customizer-modal" class="hidden fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-        <div class="bg-slate-800 border border-slate-700 rounded-3xl max-w-lg w-full p-6 shadow-2xl relative max-h-[90vh] flex flex-col">
-            <button onclick="openReactionCustomizerModal()" class="absolute top-4 right-4 text-slate-400 hover:text-white text-xl font-bold">&times;</button>
-            
-            <h3 class="text-xl font-bold mb-1">リアクション種類の編集</h3>
-            <p class="text-xs text-slate-400 mb-4">受講生画面のボタンと集計項目をカスタマイズできます</p>
+    <!-- リセット確認用カスタムモーダル -->
+    <div id="confirmModal" class="fixed inset-0 z-50 bg-black/75 hidden items-center justify-center p-4">
+        <div class="bg-slate-900 border border-slate-700 rounded-2xl max-w-md w-full p-6 shadow-2xl">
+            <h3 class="text-lg font-bold text-white flex items-center gap-2 mb-2">
+                <i class="fa-solid fa-triangle-exclamation text-rose-500"></i>
+                現在の講義ルームの記録をリセットしますか？
+            </h3>
+            <p class="text-sm text-slate-300 mb-5">
+                講義コード「<span id="confirmRoomName" class="font-bold text-indigo-400"></span>」のリアクションとコメント履歴をクリアします。よろしいですか？
+            </p>
+            <div class="flex justify-end gap-3">
+                <button type="button" id="cancelClearBtn" class="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-sm font-semibold">
+                    キャンセル
+                </button>
+                <button type="button" id="executeClearBtn" class="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-sm font-bold">
+                    リセット実行
+                </button>
+            </div>
+        </div>
+    </div>
 
-            <div class="flex-1 overflow-y-auto space-y-3 pr-1 mb-4" id="customizer-rows-container">
-                <!-- JS生成 -->
+    <!-- GitHub Pages / Netlify 公開＆マルチプレイ設定ガイドモーダル -->
+    <div id="githubModal" class="fixed inset-0 z-50 bg-black/75 hidden items-center justify-center p-4 overflow-y-auto">
+        <div class="bg-slate-900 border border-slate-700 rounded-2xl max-w-2xl w-full p-6 shadow-2xl my-8 max-h-[90vh] overflow-y-auto">
+            <div class="flex items-center justify-between pb-4 border-b border-slate-800">
+                <h3 class="text-lg font-black text-white flex items-center gap-2">
+                    <i class="fa-brands fa-github text-2xl"></i>
+                    GitHub Pages / Netlify での動作＆データベース設定
+                </h3>
+                <button type="button" id="closeGithubModalBtn" class="text-slate-400 hover:text-white p-1">
+                    <i class="fa-solid fa-xmark text-xl"></i>
+                </button>
             </div>
 
-            <div class="flex justify-between items-center pt-3 border-t border-slate-700">
-                <button onclick="resetDefaultReactions()" class="text-xs text-slate-400 hover:text-white underline">初期プリセットに戻す</button>
-                <div class="space-x-2">
-                    <button onclick="closeReactionCustomizerModal()" class="bg-slate-700 hover:bg-slate-600 px-4 py-2 rounded-xl text-sm transition">キャンセル</button>
-                    <button onclick="saveCustomReactions()" class="bg-indigo-600 hover:bg-indigo-500 px-5 py-2 rounded-xl text-sm font-bold transition">保存して反映</button>
+            <div class="space-y-4 my-4 text-sm text-slate-300 leading-relaxed">
+                <div class="bg-emerald-950/50 border border-emerald-500/30 rounded-xl p-4">
+                    <div class="font-bold text-emerald-300 mb-1 flex items-center gap-1.5">
+                        <i class="fa-solid fa-circle-check"></i> 設定不要でそのまま複数人リアルタイム同期が動きます！
+                    </div>
+                    <p class="text-xs text-slate-300">
+                        このバージョンでは、GitHub Pages や Netlify に <code>index.html</code> をそのままアップロードした際、Firebase の設定がまだ無くても<strong>自動的に公開WebSocketリレー（MQTT over WSS）およびタブ間通信へ接続し、スマホ・PC間でリアルタイムにリアクションとコメントが共有</strong>されます。
+                    </p>
+                </div>
+
+                <div class="space-y-3">
+                    <h4 class="font-bold text-white text-base">オプション: 専用 Firebase Firestore を使う場合</h4>
+                    <p class="text-xs text-slate-400">
+                        永続的に講義データをクラウド保存したい場合は、<a href="https://console.firebase.google.com/" target="_blank" rel="noopener noreferrer" class="text-indigo-400 underline">Firebase Console</a> で作成した <code>firebaseConfig</code> を以下に貼り付けるか、コード内の <code>CUSTOM_FIREBASE_CONFIG</code> に設定してください。
+                    </p>
+                    <div class="bg-slate-800/90 p-3.5 rounded-xl border border-slate-700">
+                        <label class="block text-xs font-bold text-slate-300 mb-1.5">
+                            カスタム Firebase Config JSON:
+                        </label>
+                        <textarea id="customFirebaseInput" rows="3" placeholder='{"apiKey": "AIza...", "authDomain": "...", "projectId": "..."}'
+                            class="w-full bg-slate-950 text-xs font-mono text-emerald-300 p-2.5 rounded-lg border border-slate-700 focus:outline-none focus:border-indigo-500"></textarea>
+                        <div class="flex justify-end mt-2">
+                            <button type="button" id="applyCustomFirebaseBtn" class="text-xs bg-indigo-600 hover:bg-indigo-500 text-white font-bold px-3 py-1.5 rounded-lg transition">
+                                この設定で再接続する
+                            </button>
+                        </div>
+                    </div>
                 </div>
             </div>
-        </div>
-    </div>
 
-    <!-- 講師PIN入力モーダル -->
-    <div id="pin-modal" class="hidden fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-        <div class="bg-slate-800 border border-slate-700 rounded-3xl max-w-xs w-full p-6 shadow-2xl text-center">
-            <h3 class="text-lg font-bold mb-1">講師画面の認証</h3>
-            <p class="text-xs text-slate-400 mb-4">PINコードを入力してください (初期: 1234)</p>
-            <input type="password" id="pin-input" maxlength="4" class="bg-slate-900 border border-slate-700 text-center text-2xl tracking-widest py-2 rounded-xl w-32 mb-4 text-white focus:outline-none focus:border-indigo-500">
-            <div class="flex space-x-2">
-                <button onclick="closePinModal()" class="flex-1 bg-slate-700 hover:bg-slate-600 py-2 rounded-xl text-sm transition">キャンセル</button>
-                <button onclick="verifyPin()" class="flex-1 bg-indigo-600 hover:bg-indigo-500 py-2 rounded-xl text-sm font-bold transition">認証</button>
+            <div class="flex justify-end pt-3 border-t border-slate-800">
+                <button type="button" id="closeGithubModalBtnBottom" class="px-5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-white text-sm font-bold">
+                    閉じる
+                </button>
             </div>
         </div>
     </div>
 
-    <script>
-        let currentRole = 'lecturer';
-        let currentRoom = 'LECTURE-101';
-        let aggregationIntervalMin = 30;
-        let myTotalReactions = 0;
-        let energyLevel = 100;
-        let isFever = false;
+    <!-- アプリケーションロジック＆マルチチャネル同期（Firebase + MQTT WebSocket + BroadcastChannel） -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, addDoc, onSnapshot, deleteDoc, doc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        let reactionTypes = [
-            { id: 'like', emoji: '👍', name: 'なるほど', color: 'bg-indigo-600 hover:bg-indigo-500 border-indigo-500', count: 0 },
-            { id: 'fire', emoji: '🔥', name: 'おもしろい', color: 'bg-amber-600 hover:bg-amber-500 border-amber-500', count: 0 },
-            { id: 'hard', emoji: '💦', name: 'むずかしい', color: 'bg-rose-600 hover:bg-rose-500 border-rose-500', count: 0 },
-            { id: 'hand', emoji: '✋', name: '質問あり', color: 'bg-emerald-600 hover:bg-emerald-500 border-emerald-500', count: 0 }
-        ];
+        // ============================================================================
+        // 【GitHub Pages / Netlify 用】
+        // 未設定(null)のままでも自動的にWebSocket(MQTT)リレーで複数人同時アクセスが動作します。
+        // ============================================================================
+        const CUSTOM_FIREBASE_CONFIG = null;
 
-        let reactionHistory = [];
+        // リアクション定義
+        const REACTION_TYPES = {
+            like:     { label: 'いいね！',     emoji: '👍', color: '#10b981', bg: 'rgba(16, 185, 129, 0.25)', freq: 587.33 },
+            insight:  { label: 'なるほど',     emoji: '💡', color: '#f59e0b', bg: 'rgba(245, 158, 11, 0.25)', freq: 783.99 },
+            bad:      { label: 'Bad / 難',    emoji: '🤔', color: '#f43f5e', bg: 'rgba(244, 63, 94, 0.25)',  freq: 293.66 },
+            question: { label: '少し速い/疑問', emoji: '❓', color: '#0ea5e9', bg: 'rgba(14, 165, 233, 0.25)', freq: 440.00 }
+        };
+
+        // コメントタグ定義
+        const COMMENT_TAGS = {
+            comment:  { label: '💬 つぶやき', badgeClass: 'bg-slate-700 text-slate-200 border-slate-600' },
+            question: { label: '❓ 質問',     badgeClass: 'bg-sky-500/20 text-sky-300 border-sky-500/40' },
+            insight:  { label: '💡 気づき',   badgeClass: 'bg-amber-500/20 text-amber-300 border-amber-500/40' },
+            help:     { label: '🆘 ヘルプ',   badgeClass: 'bg-rose-500/20 text-rose-300 border-rose-500/40' }
+        };
+
+        // URLパラメータ (?room=XXX) があれば初期講義コードとして採用
+        const urlParams = new URLSearchParams(window.location.search);
+        const initialRoomFromUrl = urlParams.get('room') ? urlParams.get('room').trim().toUpperCase() : "LEC-101";
+
+        // アプリケーション状態
+        let currentRoom = initialRoomFromUrl || "LEC-101";
+        let bucketSizeSeconds = 10;
+        let chartType = 'line';
+        let soundEnabled = true;
+        let simBotInterval = null;
+        let myTotalSentCount = 0;
+        let commentFilter = 'all';
+
+        // 記録データ配列（回数無制限）
+        let allReactions = [];
+        let allComments = [];
+        let seenEventIds = new Set();
+        let initialLoadComplete = false;
+
+        // コンボ管理
+        let comboCounter = 0;
+        let lastReactionTime = 0;
+        let comboResetTimer = null;
+
+        // 通信インスタンス
+        let db = null;
+        let auth = null;
+        let currentUser = { uid: 'user-' + Math.random().toString(36).substring(2, 8) };
+        let unsubscribeReactions = null;
+        let unsubscribeComments = null;
         let mqttClient = null;
+        let mqttConnected = false;
+        let broadcastChannel = null;
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'lecture-pulse-app';
 
-        window.addEventListener('DOMContentLoaded', () => {
-            const urlParams = new URLSearchParams(window.location.search);
-            const roomParam = urlParams.get('room');
-            const roleParam = urlParams.get('role');
+        // ============================================================================
+        // Web Audio API シンセサイザー（連続打鍵でも詰まらない軽量設計）
+        // ============================================================================
+        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+        let audioCtx = null;
 
-            if (roomParam) currentRoom = roomParam;
-            if (roleParam === 'student') {
-                currentRole = 'student';
-                applyStudentLock();
+        function playReactionSound(type, isFever = false) {
+            if (!soundEnabled) return;
+            try {
+                if (!audioCtx) audioCtx = new AudioContextClass();
+                if (audioCtx.state === 'suspended') audioCtx.resume();
+
+                const now = audioCtx.currentTime;
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                const info = REACTION_TYPES[type] || REACTION_TYPES.like;
+
+                osc.type = (type === 'bad') ? 'triangle' : 'sine';
+                const baseFreq = info.freq;
+                osc.frequency.setValueAtTime(baseFreq, now);
+                
+                if (type === 'like' || type === 'insight') {
+                    osc.frequency.exponentialRampToValueAtTime(baseFreq * (isFever ? 1.5 : 1.25), now + 0.12);
+                } else if (type === 'bad') {
+                    osc.frequency.exponentialRampToValueAtTime(baseFreq * 0.85, now + 0.15);
+                } else {
+                    osc.frequency.exponentialRampToValueAtTime(baseFreq * 1.15, now + 0.12);
+                }
+
+                gain.gain.setValueAtTime(0.1, now);
+                gain.gain.exponentialRampToValueAtTime(0.001, now + 0.15);
+
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+                osc.start(now);
+                osc.stop(now + 0.16);
+            } catch (e) {}
+        }
+
+        // ============================================================================
+        // トーストメッセージ表示
+        // ============================================================================
+        let toastTimer = null;
+        function showToast(message, iconClass = "fa-solid fa-circle-info text-indigo-400") {
+            const toast = document.getElementById('toastNotification');
+            const msgEl = document.getElementById('toastMessage');
+            const iconEl = document.getElementById('toastIcon');
+
+            msgEl.textContent = message;
+            iconEl.className = iconClass;
+
+            toast.classList.remove('translate-y-20', 'opacity-0');
+            toast.classList.add('translate-y-0', 'opacity-100');
+
+            if (toastTimer) clearTimeout(toastTimer);
+            toastTimer = setTimeout(() => {
+                toast.classList.add('translate-y-20', 'opacity-0');
+                toast.classList.remove('translate-y-0', 'opacity-100');
+            }, 3000);
+        }
+
+        // ============================================================================
+        // フローティング絵文字＆流れるライブコメント演出
+        // ============================================================================
+        function spawnFloatingEmoji(type, isSelf = false) {
+            const container = document.getElementById('floatingContainer');
+            const info = REACTION_TYPES[type] || REACTION_TYPES.like;
+            
+            // DOMが増えすぎて重くならないよう上限40個で古いものを削除
+            if (container.children.length > 40) {
+                container.removeChild(container.firstChild);
             }
 
-            document.getElementById('input-room-code').value = currentRoom;
-            document.getElementById('header-room-code').innerText = currentRoom;
-            document.getElementById('student-room-display').innerText = currentRoom;
+            const el = document.createElement('div');
+            el.className = 'floating-reaction flex items-center gap-1 font-black';
+            
+            const leftPos = 8 + Math.random() * 78;
+            el.style.left = `${leftPos}%`;
+            el.style.fontSize = isSelf ? '2.1rem' : '1.7rem';
+            
+            el.innerHTML = `<span>${info.emoji}</span>${isSelf ? `<span class="text-xs px-1.5 py-0.5 rounded bg-indigo-600/90 text-white shadow">+1</span>` : ''}`;
+            container.appendChild(el);
 
-            renderStudentButtons();
-            initMQTT();
-            initCanvasChart();
-            setInterval(gameLoop, 1000);
+            const centerIcon = document.getElementById('stageCenterIcon');
+            centerIcon.textContent = info.emoji;
+            centerIcon.classList.add('scale-125');
+            setTimeout(() => centerIcon.classList.remove('scale-125'), 120);
+
+            setTimeout(() => {
+                if (el.parentNode) el.parentNode.removeChild(el);
+            }, 2100);
+        }
+
+        function spawnFloatingComment(text, tag = 'comment') {
+            const danmakuToggle = document.getElementById('danmakuToggle');
+            if (danmakuToggle && !danmakuToggle.checked) return;
+
+            const container = document.getElementById('floatingContainer');
+            const el = document.createElement('div');
+            const tagInfo = COMMENT_TAGS[tag] || COMMENT_TAGS.comment;
+
+            // 高さをランダムに配置 (15% 〜 70%)
+            const topPos = 15 + Math.floor(Math.random() * 55);
+            el.className = 'floating-comment flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-900/90 border border-slate-600 text-white text-xs sm:text-sm font-bold shadow-lg';
+            el.style.top = `${topPos}%`;
+
+            const badgeSpan = document.createElement('span');
+            badgeSpan.className = 'text-[10px] px-1.5 py-0.5 rounded bg-indigo-500/30 text-indigo-200';
+            badgeSpan.textContent = tagInfo.label.split(' ')[0];
+
+            const textSpan = document.createElement('span');
+            textSpan.textContent = text;
+
+            el.appendChild(badgeSpan);
+            el.appendChild(textSpan);
+            container.appendChild(el);
+
+            setTimeout(() => {
+                if (el.parentNode) el.parentNode.removeChild(el);
+            }, 7500);
+        }
+
+        function updateCombo() {
+            const now = Date.now();
+            if (now - lastReactionTime < 2500) {
+                comboCounter++;
+            } else {
+                comboCounter = 1;
+            }
+            lastReactionTime = now;
+
+            const comboContainer = document.getElementById('comboContainer');
+            const comboCountEl = document.getElementById('comboCount');
+
+            if (comboCounter >= 2) {
+                comboCountEl.textContent = comboCounter;
+                comboContainer.classList.remove('opacity-0', 'combo-animate');
+                void comboContainer.offsetWidth;
+                comboContainer.classList.add('opacity-100', 'combo-animate');
+            }
+
+            if (comboResetTimer) clearTimeout(comboResetTimer);
+            comboResetTimer = setTimeout(() => {
+                comboCounter = 0;
+                comboContainer.classList.remove('opacity-100');
+                comboContainer.classList.add('opacity-0');
+            }, 2600);
+        }
+
+        // ============================================================================
+        // Chart.js 高解像度（Retina / 高DPI強制）リアルタイム推移グラフ
+        // ============================================================================
+        const ctx = document.getElementById('timelineChart').getContext('2d');
+        const highDpiRatio = Math.max(window.devicePixelRatio || 1, 2);
+
+        const timelineChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [
+                    {
+                        label: '👍 いいね！',
+                        data: [],
+                        borderColor: REACTION_TYPES.like.color,
+                        backgroundColor: REACTION_TYPES.like.bg,
+                        borderWidth: 2.5,
+                        tension: 0.3,
+                        fill: true,
+                        pointRadius: 3
+                    },
+                    {
+                        label: '💡 なるほど',
+                        data: [],
+                        borderColor: REACTION_TYPES.insight.color,
+                        backgroundColor: REACTION_TYPES.insight.bg,
+                        borderWidth: 2.5,
+                        tension: 0.3,
+                        fill: true,
+                        pointRadius: 3
+                    },
+                    {
+                        label: '🤔 Bad / 難',
+                        data: [],
+                        borderColor: REACTION_TYPES.bad.color,
+                        backgroundColor: REACTION_TYPES.bad.bg,
+                        borderWidth: 2.5,
+                        tension: 0.3,
+                        fill: true,
+                        pointRadius: 3
+                    },
+                    {
+                        label: '❓ 少し速い/疑問',
+                        data: [],
+                        borderColor: REACTION_TYPES.question.color,
+                        backgroundColor: REACTION_TYPES.question.bg,
+                        borderWidth: 2.5,
+                        tension: 0.3,
+                        fill: true,
+                        pointRadius: 3
+                    }
+                ]
+            },
+            options: {
+                devicePixelRatio: highDpiRatio, // GitHub/Netlify公開時のモバイル・PC画質劣化を防止
+                responsive: true,
+                maintainAspectRatio: false,
+                animation: {
+                    duration: 200
+                },
+                interaction: {
+                    mode: 'index',
+                    intersect: false
+                },
+                plugins: {
+                    legend: {
+                        position: 'top',
+                        labels: {
+                            color: '#e2e8f0',
+                            font: { family: "'Inter', 'Noto Sans JP', sans-serif", size: 12, weight: 'bold' },
+                            usePointStyle: true,
+                            padding: 14
+                        }
+                    },
+                    tooltip: {
+                        backgroundColor: 'rgba(15, 23, 42, 0.95)',
+                        titleColor: '#f8fafc',
+                        bodyColor: '#e2e8f0',
+                        borderColor: '#475569',
+                        borderWidth: 1,
+                        padding: 10
+                    }
+                },
+                scales: {
+                    x: {
+                        grid: { color: 'rgba(51, 65, 85, 0.35)' },
+                        ticks: { color: '#cbd5e1', font: { size: 11 }, maxRotation: 0, autoSkip: true, maxTicksLimit: 8 }
+                    },
+                    y: {
+                        beginAtZero: true,
+                        grace: '15%', // 5回を超えて何十回・何百回送られても自動でスケール拡張
+                        grid: { color: 'rgba(51, 65, 85, 0.4)' },
+                        ticks: { color: '#cbd5e1', precision: 0 }
+                    }
+                }
+            }
         });
 
-        function switchView(role) {
-            if (role === 'lecturer') {
-                openPinModal();
+        function formatTimeLabel(timestampMs, bucketSec) {
+            const d = new Date(timestampMs);
+            const hh = String(d.getHours()).padStart(2, '0');
+            const mm = String(d.getMinutes()).padStart(2, '0');
+            const ss = String(d.getSeconds()).padStart(2, '0');
+            return bucketSec < 60 ? `${hh}:${mm}:${ss}` : `${hh}:${mm}`;
+        }
+
+        // ============================================================================
+        // 単位時間ごとの集計とグラフ・UI更新
+        // ============================================================================
+        function updateDashboardAndChart() {
+            const now = Date.now();
+            const roomReactions = allReactions.filter(r => r.room === currentRoom);
+
+            const totals = { like: 0, insight: 0, bad: 0, question: 0 };
+            roomReactions.forEach(r => {
+                if (totals[r.type] !== undefined) totals[r.type]++;
+            });
+
+            document.getElementById('count-like').textContent = totals.like;
+            document.getElementById('count-insight').textContent = totals.insight;
+            document.getElementById('count-bad').textContent = totals.bad;
+            document.getElementById('count-question').textContent = totals.question;
+            document.getElementById('totalReactionsCount').textContent = roomReactions.length;
+
+            const totalCount = roomReactions.length;
+            const positiveCount = totals.like + totals.insight;
+            const ratioEl = document.getElementById('positiveRatioText');
+            if (totalCount > 0) {
+                const pct = Math.round((positiveCount / totalCount) * 100);
+                ratioEl.textContent = `${pct}% (${positiveCount}/${totalCount})`;
+            } else {
+                ratioEl.textContent = '-- %';
+            }
+
+            const recent10sCount = roomReactions.filter(r => now - r.timestamp <= 10000).length;
+            document.getElementById('rpmDisplay').textContent = `${recent10sCount} react / 10秒`;
+            
+            const voltagePct = Math.min(100, Math.round((recent10sCount / 15) * 100));
+            document.getElementById('voltageBar').style.width = `${voltagePct}%`;
+
+            const liveStage = document.getElementById('liveStage');
+            const feverBadge = document.getElementById('feverBadge');
+            const stageTitle = document.getElementById('stageStatusTitle');
+
+            if (voltagePct >= 80) {
+                liveStage.classList.add('fever-mode');
+                feverBadge.innerHTML = '<i class="fa-solid fa-fire text-amber-300 mr-1 animate-bounce"></i>🔥 FEVER! 講義が白熱中！';
+                stageTitle.textContent = "🔥 講義が最高に盛り上がっています！！";
+            } else {
+                liveStage.classList.remove('fever-mode');
+                feverBadge.innerHTML = '<i class="fa-solid fa-fire-flame-curved mr-1"></i>講義の盛り上がり度';
+                if (totalCount === 0) {
+                    stageTitle.textContent = "ボタンを押して講義にリアクション！";
+                } else {
+                    stageTitle.textContent = `講義ルーム [${currentRoom}] でリアルタイム集計中（計 ${totalCount} 回）`;
+                }
+            }
+
+            const bucketMs = bucketSizeSeconds * 1000;
+            const numBuckets = bucketSizeSeconds === 60 ? 20 : 18;
+            const currentBucketEnd = Math.floor(now / bucketMs) * bucketMs;
+
+            const labels = [];
+            const seriesLike = [];
+            const seriesInsight = [];
+            const seriesBad = [];
+            const seriesQuestion = [];
+
+            let maxPositiveVal = 0;
+            let maxPositiveLabel = "記録なし";
+            let maxNegativeVal = 0;
+            let maxNegativeLabel = "記録なし";
+
+            for (let i = numBuckets - 1; i >= 0; i--) {
+                const startTime = currentBucketEnd - (i * bucketMs);
+                const endTime = startTime + bucketMs;
+                const labelStr = formatTimeLabel(startTime, bucketSizeSeconds);
+                labels.push(labelStr);
+
+                let cLike = 0, cInsight = 0, cBad = 0, cQuestion = 0;
+
+                for (let j = 0; j < roomReactions.length; j++) {
+                    const t = roomReactions[j].timestamp;
+                    if (t >= startTime && t < endTime) {
+                        const rType = roomReactions[j].type;
+                        if (rType === 'like') cLike++;
+                        else if (rType === 'insight') cInsight++;
+                        else if (rType === 'bad') cBad++;
+                        else if (rType === 'question') cQuestion++;
+                    }
+                }
+
+                seriesLike.push(cLike);
+                seriesInsight.push(cInsight);
+                seriesBad.push(cBad);
+                seriesQuestion.push(cQuestion);
+
+                const posSum = cLike + cInsight;
+                const negSum = cBad + cQuestion;
+                if (posSum > maxPositiveVal) {
+                    maxPositiveVal = posSum;
+                    maxPositiveLabel = `${labelStr} (${posSum}件)`;
+                }
+                if (negSum > maxNegativeVal) {
+                    maxNegativeVal = negSum;
+                    maxNegativeLabel = `${labelStr} (${negSum}件)`;
+                }
+            }
+
+            document.getElementById('positivePeakTime').textContent = maxPositiveLabel;
+            document.getElementById('negativePeakTime').textContent = maxNegativeLabel;
+
+            timelineChart.data.labels = labels;
+            timelineChart.data.datasets[0].data = seriesLike;
+            timelineChart.data.datasets[1].data = seriesInsight;
+            timelineChart.data.datasets[2].data = seriesBad;
+            timelineChart.data.datasets[3].data = seriesQuestion;
+            timelineChart.update('none');
+        }
+
+        // ============================================================================
+        // コメント一覧の描画更新
+        // ============================================================================
+        function renderCommentList() {
+            const container = document.getElementById('commentListContainer');
+            const badge = document.getElementById('commentCountBadge');
+
+            const roomComments = allComments
+                .filter(c => c.room === currentRoom)
+                .sort((a, b) => b.timestamp - a.timestamp);
+
+            badge.textContent = `${roomComments.length}件`;
+
+            const filtered = commentFilter === 'all'
+                ? roomComments
+                : roomComments.filter(c => c.tag === commentFilter);
+
+            if (filtered.length === 0) {
+                container.innerHTML = `
+                    <div class="text-center py-8 text-slate-500 text-xs">
+                        表示できるコメントはありません。講義の感想や疑問を気軽に書き込んでみましょう！
+                    </div>
+                `;
                 return;
             }
-            setRole('student');
-        }
 
-        function setRole(role) {
-            currentRole = role;
-            const studentView = document.getElementById('view-student');
-            const lecturerView = document.getElementById('view-lecturer');
-            const tabStudent = document.getElementById('tab-student');
-            const tabLecturer = document.getElementById('tab-lecturer');
-            const lockBar = document.getElementById('student-lock-bar');
-            const mainHeader = document.getElementById('main-header');
+            container.innerHTML = '';
+            filtered.slice(0, 60).forEach(item => {
+                const tagInfo = COMMENT_TAGS[item.tag] || COMMENT_TAGS.comment;
+                const timeStr = formatTimeLabel(item.timestamp, 10);
 
-            if (role === 'student') {
-                studentView.classList.remove('hidden');
-                lecturerView.classList.add('hidden');
-                tabStudent.className = "px-4 py-1.5 rounded-lg text-sm font-medium transition bg-indigo-600 text-white shadow";
-                tabLecturer.className = "px-4 py-1.5 rounded-lg text-sm font-medium transition text-slate-400 hover:text-white";
-                lockBar.classList.remove('hidden');
-                mainHeader.classList.add('hidden');
-            } else {
-                studentView.classList.add('hidden');
-                lecturerView.classList.remove('hidden');
-                tabLecturer.className = "px-4 py-1.5 rounded-lg text-sm font-medium transition bg-indigo-600 text-white shadow";
-                tabStudent.className = "px-4 py-1.5 rounded-lg text-sm font-medium transition text-slate-400 hover:text-white";
-                lockBar.classList.add('hidden');
-                mainHeader.classList.remove('hidden');
-                drawChart();
-            }
-        }
+                const row = document.createElement('div');
+                row.className = 'bg-slate-800/80 border border-slate-700/80 rounded-xl p-3 flex items-start justify-between gap-3 transition hover:border-slate-600';
 
-        function applyStudentLock() {
-            setRole('student');
-            document.getElementById('main-header').classList.add('hidden');
-            document.getElementById('student-lock-bar').classList.remove('hidden');
-            document.getElementById('current-room-badge').innerText = currentRoom;
-        }
+                const leftDiv = document.createElement('div');
+                leftDiv.className = 'flex-1 min-w-0';
 
-        function exitStudentLock() {
-            openPinModal();
-        }
+                const metaDiv = document.createElement('div');
+                metaDiv.className = 'flex items-center gap-2 mb-1';
 
-        function openPinModal() {
-            document.getElementById('pin-modal').classList.remove('hidden');
-            document.getElementById('pin-input').value = '';
-            document.getElementById('pin-input').focus();
-        }
-        function closePinModal() {
-            document.getElementById('pin-modal').classList.add('hidden');
-        }
-        function verifyPin() {
-            const val = document.getElementById('pin-input').value;
-            if (val === '1234') {
-                closePinModal();
-                setRole('lecturer');
-                document.getElementById('student-lock-bar').classList.add('hidden');
-                document.getElementById('main-header').classList.remove('hidden');
-            } else {
-                alert('PINコードが違います (初期設定: 1234)');
-            }
-        }
+                const tagSpan = document.createElement('span');
+                tagSpan.className = `text-[10px] font-bold px-2 py-0.5 rounded border ${tagInfo.badgeClass}`;
+                tagSpan.textContent = tagInfo.label;
 
-        function initMQTT() {
-            try {
-                const brokerUrl = 'wss://broker.emqx.io:8084/mqtt';
-                mqttClient = mqtt.connect(brokerUrl, { clientId: 'lp_' + Math.random().toString(16).substr(2, 8) });
+                const timeSpan = document.createElement('span');
+                timeSpan.className = 'text-[11px] text-slate-400 font-mono';
+                timeSpan.textContent = timeStr;
 
-                mqttClient.on('connect', () => {
-                    document.getElementById('sync-status').className = "inline-block w-2 h-2 rounded-full bg-emerald-400";
-                    document.getElementById('sync-status-text').innerText = "🌐 クラウド同期中";
-                    mqttClient.subscribe(`lecturepulse/${currentRoom}/reactions`);
-                    mqttClient.subscribe(`lecturepulse/${currentRoom}/config`);
+                metaDiv.appendChild(tagSpan);
+                metaDiv.appendChild(timeSpan);
+
+                const textP = document.createElement('p');
+                textP.className = 'text-xs sm:text-sm text-slate-100 font-medium break-words';
+                textP.textContent = item.text;
+
+                leftDiv.appendChild(metaDiv);
+                leftDiv.appendChild(textP);
+
+                // コメントへの「👍共感」ボタン（押すと「いいね」リアクションとしても連動）
+                const likeBtn = document.createElement('button');
+                likeBtn.type = 'button';
+                likeBtn.className = 'text-xs bg-slate-900 hover:bg-indigo-950 text-slate-300 hover:text-indigo-300 border border-slate-700 px-2.5 py-1 rounded-lg transition flex items-center gap-1 shrink-0';
+                likeBtn.innerHTML = `<span>👍</span><span class="font-bold">${item.likes || 0}</span>`;
+                likeBtn.addEventListener('click', () => {
+                    item.likes = (item.likes || 0) + 1;
+                    renderCommentList();
+                    triggerReaction('like', false);
                 });
 
-                mqttClient.on('error', () => {
-                    document.getElementById('sync-status').className = "inline-block w-2 h-2 rounded-full bg-amber-400";
-                    document.getElementById('sync-status-text').innerText = "⚠️ ローカル動作中";
-                });
-
-                mqttClient.on('message', (topic, payload) => {
-                    try {
-                        const data = JSON.parse(payload.toString());
-                        if (topic.endsWith('/reactions')) {
-                            receiveReaction(data.typeId, false);
-                        } else if (topic.endsWith('/config')) {
-                            reactionTypes = data.reactionTypes;
-                            renderStudentButtons();
-                        }
-                    } catch(e){}
-                });
-            } catch(e) {
-                document.getElementById('sync-status').className = "inline-block w-2 h-2 rounded-full bg-amber-400";
-                document.getElementById('sync-status-text').innerText = "⚠️ オフライン動作中";
-            }
-        }
-
-        function changeRoomCode() {
-            const code = document.getElementById('input-room-code').value.trim();
-            if (!code) return;
-            currentRoom = code;
-            document.getElementById('header-room-code').innerText = currentRoom;
-            document.getElementById('student-room-display').innerText = currentRoom;
-            if (mqttClient && mqttClient.connected) {
-                mqttClient.subscribe(`lecturepulse/${currentRoom}/reactions`);
-                mqttClient.subscribe(`lecturepulse/${currentRoom}/config`);
-            }
-            alert(`ルームを 「${currentRoom}」 に変更しました。`);
-        }
-
-        function renderStudentButtons() {
-            const grid = document.getElementById('student-buttons-grid');
-            grid.innerHTML = '';
-            reactionTypes.forEach(rt => {
-                const btn = document.createElement('button');
-                btn.className = `p-4 rounded-2xl border ${rt.color} flex flex-col items-center justify-center transition active:scale-95 shadow-lg`;
-                btn.onclick = () => sendReaction(rt.id);
-                btn.innerHTML = `
-                    <span class="text-3xl mb-1">${rt.emoji}</span>
-                    <span class="text-xs font-bold text-white">${rt.name}</span>
-                `;
-                grid.appendChild(btn);
+                row.appendChild(leftDiv);
+                row.appendChild(likeBtn);
+                container.appendChild(row);
             });
         }
 
-        function sendReaction(typeId) {
-            if (energyLevel < 15) return;
-            energyLevel = Math.max(0, energyLevel - 20);
-            myTotalReactions++;
-            document.getElementById('my-reaction-count').innerText = myTotalReactions;
-
-            receiveReaction(typeId, true);
-
-            if (mqttClient && mqttClient.connected) {
-                mqttClient.publish(`lecturepulse/${currentRoom}/reactions`, JSON.stringify({ typeId }));
-            }
-
-            createFloatingEmoji(typeId);
-        }
-
-        function receiveReaction(typeId) {
-            const rt = reactionTypes.find(r => r.id === typeId);
-            if (rt) rt.count++;
-
-            reactionHistory.push({ timestamp: Date.now(), typeId });
-
-            if (currentRole === 'lecturer') {
-                updateLecturerStats();
-                drawChart();
-            }
-        }
-
-        function createFloatingEmoji(typeId) {
-            const rt = reactionTypes.find(r => r.id === typeId);
-            if (!rt) return;
-            const card = document.getElementById('student-card');
-            const el = document.createElement('div');
-            el.className = 'floating-emoji';
-            el.innerText = rt.emoji;
-            el.style.left = `${Math.random() * 80 + 10}%`;
-            el.style.bottom = '20px';
-            card.appendChild(el);
-            setTimeout(() => el.remove(), 1200);
-        }
-
-        function updateLecturerStats() {
-            const total = reactionTypes.reduce((sum, r) => sum + r.count, 0);
-            document.getElementById('stat-total-reactions').innerText = total;
+        // ============================================================================
+        // リアクション＆コメント送信処理（ノンブロッキング・無制限送信保証）
+        // ============================================================================
+        function triggerReaction(type, isSimulatedBot = false) {
+            if (!REACTION_TYPES[type]) return;
 
             const now = Date.now();
-            const recent = reactionHistory.filter(h => now - h.timestamp <= 60000).length;
-            document.getElementById('stat-current-rate').innerHTML = `${recent} <span class="text-sm font-normal text-slate-400">回/分</span>`;
-            document.getElementById('stat-rate-bar').style.width = `${Math.min(100, (recent / 30) * 100)}%`;
+            const eventId = 'ev-' + now + '-' + Math.random().toString(36).substring(2, 8);
+            const isFever = document.getElementById('liveStage').classList.contains('fever-mode');
 
-            if (recent >= 20 && !isFever) {
-                isFever = true;
-                document.getElementById('stat-fever-status').className = "px-3 py-1 rounded-full text-xs bg-gradient-to-r from-red-500 to-amber-500 text-white font-bold animate-pulse";
-                document.getElementById('stat-fever-status').innerText = "🔥 FEVER 発生中!!";
-                document.getElementById('lecturer-fever-card').classList.add('fever-active');
-            } else if (recent < 10 && isFever) {
-                isFever = false;
-                document.getElementById('stat-fever-status').className = "px-3 py-1 rounded-full text-xs bg-slate-700 text-slate-300";
-                document.getElementById('stat-fever-status').innerText = "通常モード";
-                document.getElementById('lecturer-fever-card').classList.remove('fever-active');
+            // 1. まずローカル状態に即座に追加（通信結果に関わらず5回制限などで止まらない）
+            seenEventIds.add(eventId);
+            const reactionObj = {
+                eventId: eventId,
+                kind: 'reaction',
+                room: currentRoom,
+                type: type,
+                timestamp: now,
+                userId: isSimulatedBot ? 'sim-student-bot' : currentUser.uid
+            };
+            allReactions.push(reactionObj);
+
+            if (!isSimulatedBot) {
+                myTotalSentCount++;
+                document.getElementById('mySentCountBadge').textContent = `自分の送信数: ${myTotalSentCount}回`;
+                updateCombo();
+            }
+
+            // 2. 画面エフェクト・効果音・グラフを即時更新
+            spawnFloatingEmoji(type, !isSimulatedBot);
+            playReactionSound(type, isFever);
+            updateDashboardAndChart();
+
+            // 3. バックグラウンドで他の参加者へリアルタイム配信（Firebase / MQTT / BroadcastChannel）
+            broadcastRealtimeEvent(reactionObj);
+        }
+
+        function submitComment(text, tag = 'comment', isSimulatedBot = false) {
+            const cleanText = text.trim();
+            if (!cleanText) return;
+
+            const now = Date.now();
+            const eventId = 'cm-' + now + '-' + Math.random().toString(36).substring(2, 8);
+            seenEventIds.add(eventId);
+
+            const commentObj = {
+                eventId: eventId,
+                kind: 'comment',
+                room: currentRoom,
+                text: cleanText,
+                tag: tag,
+                likes: 0,
+                timestamp: now,
+                userId: isSimulatedBot ? 'sim-student-bot' : currentUser.uid
+            };
+
+            allComments.push(commentObj);
+            spawnFloatingComment(cleanText, tag);
+            renderCommentList();
+
+            // 質問タグの場合はグラフの「❓少し速い/疑問」または「💡気づき」にも連動反映
+            if (tag === 'question' || tag === 'help') {
+                triggerReaction('question', isSimulatedBot);
+            } else if (tag === 'insight') {
+                triggerReaction('insight', isSimulatedBot);
+            }
+
+            broadcastRealtimeEvent(commentObj);
+        }
+
+        // ============================================================================
+        // マルチチャネル配信（Firebase + P2P MQTT WebSocket + BroadcastChannel）
+        // ============================================================================
+        function broadcastRealtimeEvent(payload) {
+            // A. 同一ブラウザの別タブへ即時同期
+            if (broadcastChannel) {
+                try { broadcastChannel.postMessage(payload); } catch (e) {}
+            }
+
+            // B. P2P MQTT WebSocket（GitHub Pages / Netlify で設定なしでも別端末と同期）
+            if (mqttClient && mqttConnected) {
+                try {
+                    const message = new Paho.MQTT.Message(JSON.stringify(payload));
+                    message.destinationName = `lecturepulse/v2/${payload.room}`;
+                    mqttClient.send(message);
+                } catch (e) {}
+            }
+
+            // C. Firebase Firestore が有効な場合はクラウド保存
+            if (db && currentUser && currentUser.uid) {
+                const colName = payload.kind === 'comment' ? 'lecture_comments' : 'lecture_reactions';
+                const colRef = collection(db, 'artifacts', appId, 'public', 'data', colName);
+                addDoc(colRef, payload).catch(() => {});
             }
         }
 
-        function setAggregationInterval(minutes) {
-            aggregationIntervalMin = minutes;
-            ['30', '60', '90', '5'].forEach(m => {
-                const btn = document.getElementById(`btn-agg-${m}`);
-                if (btn) {
-                    btn.className = (Number(m) === minutes) ? "px-3 py-1.5 rounded-lg transition bg-indigo-600 text-white font-bold" : "px-3 py-1.5 rounded-lg transition text-slate-400 hover:text-white";
+        function handleIncomingRemoteEvent(data) {
+            if (!data || !data.eventId || seenEventIds.has(data.eventId)) return;
+            seenEventIds.add(data.eventId);
+
+            if (data.kind === 'comment') {
+                allComments.push(data);
+                if (data.room === currentRoom) {
+                    spawnFloatingComment(data.text, data.tag);
+                    renderCommentList();
                 }
-            });
-            drawChart();
+            } else {
+                allReactions.push(data);
+                if (data.room === currentRoom) {
+                    spawnFloatingEmoji(data.type, false);
+                    playReactionSound(data.type, false);
+                    updateDashboardAndChart();
+                }
+            }
         }
 
-        let canvasCtx = null;
-        function initCanvasChart() {
-            const canvas = document.getElementById('reactionChart');
-            canvasCtx = canvas.getContext('2d');
-            resizeCanvas();
-            window.addEventListener('resize', resizeCanvas);
-            drawChart();
-        }
+        // ============================================================================
+        // QRコード生成機能（Canvas/Img描画＋カスタムURL対応）
+        // ============================================================================
+        function renderRoomQrCode(customUrl = null) {
+            const container = document.getElementById('qrCodeContainer');
+            const shareUrlInput = document.getElementById('shareUrlInput');
+            const qrRoomLabel = document.getElementById('qrRoomLabel');
 
-        function resizeCanvas() {
-            const canvas = document.getElementById('reactionChart');
-            if (!canvas) return;
-            canvas.width = canvas.parentElement.clientWidth - 16;
-            canvas.height = canvas.parentElement.clientHeight - 16;
-            drawChart();
-        }
+            qrRoomLabel.textContent = currentRoom;
 
-        function drawChart() {
-            if (!canvasCtx) return;
-            const canvas = canvasCtx.canvas;
-            const w = canvas.width;
-            const h = canvas.height;
-
-            canvasCtx.clearRect(0, 0, w, h);
-
-            canvasCtx.strokeStyle = 'rgba(51, 65, 85, 0.4)';
-            canvasCtx.lineWidth = 1;
-            for (let i = 1; i <= 4; i++) {
-                let y = (h / 5) * i;
-                canvasCtx.beginPath();
-                canvasCtx.moveTo(40, y);
-                canvasCtx.lineTo(w - 20, y);
-                canvasCtx.stroke();
+            let targetUrl = customUrl;
+            if (!targetUrl) {
+                try {
+                    const u = new URL(window.location.href);
+                    u.searchParams.set('room', currentRoom);
+                    targetUrl = u.toString();
+                } catch (e) {
+                    targetUrl = window.location.origin + window.location.pathname + `?room=${encodeURIComponent(currentRoom)}`;
+                }
+                shareUrlInput.value = targetUrl;
             }
 
-            const intervalMs = aggregationIntervalMin * 60 * 1000;
-            const now = Date.now();
-            const slotCount = 6;
-            const buckets = [];
+            container.innerHTML = '';
+            if (typeof QRCode !== 'undefined') {
+                new QRCode(container, {
+                    text: targetUrl,
+                    width: 200,
+                    height: 200,
+                    colorDark: "#0f172a",
+                    colorLight: "#ffffff",
+                    correctLevel: QRCode.CorrectLevel.M
+                });
+            } else {
+                container.innerHTML = '<p class="text-xs text-slate-600">QRライブラリ読込中...</p>';
+            }
+        }
 
-            for (let i = slotCount - 1; i >= 0; i--) {
-                const endTime = now - (i * intervalMs);
-                const startTime = endTime - intervalMs;
-                const label = `${Math.round((now - endTime) / 60000)}分前`;
-                
-                const slotData = {};
-                reactionTypes.forEach(rt => { slotData[rt.id] = 0; });
+        // ============================================================================
+        // 通信レイヤー初期化（Firebase & WebSocket MQTT リレー）
+        // ============================================================================
+        function initBroadcastAndMqtt() {
+            // 1. BroadcastChannel（同一PCの複数ウィンドウ・プレゼン画面共有用）
+            if ('BroadcastChannel' in window) {
+                broadcastChannel = new BroadcastChannel('lecture_pulse_channel');
+                broadcastChannel.onmessage = (ev) => {
+                    if (ev.data) handleIncomingRemoteEvent(ev.data);
+                };
+            }
 
-                reactionHistory.forEach(h => {
-                    if (h.timestamp > startTime && h.timestamp <= endTime) {
-                        if (slotData[h.typeId] !== undefined) slotData[h.typeId]++;
+            // 2. WebSocket MQTT リレー（GitHub Pages / Netlify で複数スマホから同時接続用）
+            if (typeof Paho !== 'undefined') {
+                try {
+                    const clientId = "lp_" + Math.random().toString(16).substring(2, 10);
+                    mqttClient = new Paho.MQTT.Client("broker.emqx.io", 8084, "/mqtt", clientId);
+
+                    mqttClient.onConnectionLost = () => {
+                        mqttConnected = false;
+                    };
+                    mqttClient.onMessageArrived = (message) => {
+                        try {
+                            const data = JSON.parse(message.payloadString);
+                            handleIncomingRemoteEvent(data);
+                        } catch (e) {}
+                    };
+
+                    mqttClient.connect({
+                        useSSL: true,
+                        timeout: 5,
+                        onSuccess: () => {
+                            mqttConnected = true;
+                            mqttClient.subscribe(`lecturepulse/v2/${currentRoom}`);
+                            updateSyncBadgeStatus();
+                        },
+                        onFailure: () => {
+                            mqttConnected = false;
+                            updateSyncBadgeStatus();
+                        }
+                    });
+                } catch (e) {}
+            }
+        }
+
+        function updateSyncBadgeStatus() {
+            const badge = document.getElementById('syncStatusBadge');
+            if (db || mqttConnected) {
+                badge.className = "text-[11px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 flex items-center gap-1";
+                badge.innerHTML = '<span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span> LIVE同期中';
+            } else {
+                badge.className = "text-[11px] font-bold px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 flex items-center gap-1";
+                badge.innerHTML = '<span class="w-2 h-2 rounded-full bg-indigo-400"></span> リアルタイム動作中';
+            }
+        }
+
+        async function initRealtimeSync(overrideConfig = null) {
+            const userIdDisplay = document.getElementById('userIdDisplay');
+            userIdDisplay.textContent = `ID: ${currentUser.uid}`;
+
+            try {
+                let firebaseConfig = overrideConfig || CUSTOM_FIREBASE_CONFIG;
+                if (!firebaseConfig && typeof __firebase_config !== 'undefined' && __firebase_config) {
+                    firebaseConfig = JSON.parse(__firebase_config);
+                }
+
+                if (!firebaseConfig) {
+                    updateSyncBadgeStatus();
+                    return;
+                }
+
+                const app = initializeApp(firebaseConfig, 'lecture-pulse-' + Date.now());
+                auth = getAuth(app);
+                db = getFirestore(app);
+
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token && !overrideConfig) {
+                    await signInWithCustomToken(auth, __initial_auth_token);
+                } else {
+                    await signInAnonymously(auth);
+                }
+
+                onAuthStateChanged(auth, (user) => {
+                    if (user) {
+                        currentUser = user;
+                        userIdDisplay.textContent = `ID: ${user.uid}`;
+                        startFirestoreListeners();
+                        updateSyncBadgeStatus();
                     }
                 });
-
-                buckets.push({ label, counts: slotData });
+            } catch (err) {
+                db = null;
+                updateSyncBadgeStatus();
             }
-
-            let maxVal = 5;
-            buckets.forEach(b => {
-                reactionTypes.forEach(rt => {
-                    if (b.counts[rt.id] > maxVal) maxVal = b.counts[rt.id];
-                });
-            });
-
-            const colors = ['#6366f1', '#f59e0b', '#f43f5e', '#10b981', '#38bdf8', '#a855f7'];
-            const chartW = w - 60;
-            const chartH = h - 40;
-            const stepX = chartW / (slotCount - 1 || 1);
-
-            reactionTypes.forEach((rt, idx) => {
-                const color = colors[idx % colors.length];
-                canvasCtx.strokeStyle = color;
-                canvasCtx.fillStyle = color;
-                canvasCtx.lineWidth = 2.5;
-
-                canvasCtx.beginPath();
-                buckets.forEach((b, i) => {
-                    const val = b.counts[rt.id];
-                    const x = 50 + (i * stepX);
-                    const y = (h - 30) - (val / maxVal) * (chartH - 20);
-
-                    if (i === 0) canvasCtx.moveTo(x, y);
-                    else canvasCtx.lineTo(x, y);
-                });
-                canvasCtx.stroke();
-
-                buckets.forEach((b, i) => {
-                    const val = b.counts[rt.id];
-                    const x = 50 + (i * stepX);
-                    const y = (h - 30) - (val / maxVal) * (chartH - 20);
-
-                    canvasCtx.beginPath();
-                    canvasCtx.arc(x, y, 4, 0, Math.PI * 2);
-                    canvasCtx.fill();
-                });
-            });
-
-            canvasCtx.fillStyle = '#94a3b8';
-            canvasCtx.font = '10px sans-serif';
-            buckets.forEach((b, i) => {
-                const x = 50 + (i * stepX) - 15;
-                canvasCtx.fillText(b.label, x, h - 10);
-            });
         }
 
-        function gameLoop() {
-            if (currentRole === 'student') {
-                if (energyLevel < 100) {
-                    energyLevel = Math.min(100, energyLevel + 15);
-                    document.getElementById('energy-bar').style.width = `${energyLevel}%`;
-                    document.getElementById('energy-text').innerText = `${energyLevel}%`;
+        function startFirestoreListeners() {
+            if (!db || !currentUser) return;
+            if (unsubscribeReactions) unsubscribeReactions();
+            if (unsubscribeComments) unsubscribeComments();
+
+            const reactionsRef = collection(db, 'artifacts', appId, 'public', 'data', 'lecture_reactions');
+            unsubscribeReactions = onSnapshot(reactionsRef, (snapshot) => {
+                snapshot.forEach((docSnap) => {
+                    const data = docSnap.data();
+                    const evId = data.eventId || docSnap.id;
+                    if (data && data.type && data.timestamp && !seenEventIds.has(evId)) {
+                        seenEventIds.add(evId);
+                        allReactions.push({
+                            id: docSnap.id,
+                            eventId: evId,
+                            room: data.room || 'LEC-101',
+                            type: data.type,
+                            timestamp: data.timestamp,
+                            userId: data.userId || 'anon'
+                        });
+                        if (initialLoadComplete && data.room === currentRoom && data.userId !== currentUser.uid) {
+                            spawnFloatingEmoji(data.type, false);
+                            playReactionSound(data.type, false);
+                        }
+                    }
+                });
+                initialLoadComplete = true;
+                updateDashboardAndChart();
+            }, () => {});
+
+            const commentsRef = collection(db, 'artifacts', appId, 'public', 'data', 'lecture_comments');
+            unsubscribeComments = onSnapshot(commentsRef, (snapshot) => {
+                snapshot.forEach((docSnap) => {
+                    const data = docSnap.data();
+                    const evId = data.eventId || docSnap.id;
+                    if (data && data.text && data.timestamp && !seenEventIds.has(evId)) {
+                        seenEventIds.add(evId);
+                        allComments.push({
+                            id: docSnap.id,
+                            eventId: evId,
+                            room: data.room || 'LEC-101',
+                            text: data.text,
+                            tag: data.tag || 'comment',
+                            likes: data.likes || 0,
+                            timestamp: data.timestamp,
+                            userId: data.userId || 'anon'
+                        });
+                        if (initialLoadComplete && data.room === currentRoom && data.userId !== currentUser.uid) {
+                            spawnFloatingComment(data.text, data.tag);
+                        }
+                    }
+                });
+                renderCommentList();
+            }, () => {});
+        }
+
+        // ============================================================================
+        // イベントリスナー登録
+        // ============================================================================
+        window.addEventListener('DOMContentLoaded', () => {
+            const roomInput = document.getElementById('roomInput');
+            roomInput.value = currentRoom;
+
+            initBroadcastAndMqtt();
+            initRealtimeSync();
+            updateDashboardAndChart();
+            renderCommentList();
+
+            // 1秒ごとに時系列グラフの時間軸を更新
+            setInterval(() => {
+                updateDashboardAndChart();
+            }, 1000);
+
+            // リアクションボタンクリック（連打・無制限対応）
+            document.querySelectorAll('.reaction-btn').forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    const type = btn.getAttribute('data-type');
+                    triggerReaction(type, false);
+                });
+            });
+
+            // キーボードショートカット (1, 2, 3, 4)
+            window.addEventListener('keydown', (e) => {
+                if (['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName)) return;
+                if (e.key === '1') triggerReaction('like', false);
+                else if (e.key === '2') triggerReaction('insight', false);
+                else if (e.key === '3') triggerReaction('bad', false);
+                else if (e.key === '4') triggerReaction('question', false);
+            });
+
+            // コメント送信フォーム
+            const commentForm = document.getElementById('commentForm');
+            const commentInput = document.getElementById('commentInput');
+            const commentTagSelect = document.getElementById('commentTagSelect');
+
+            commentForm.addEventListener('submit', (e) => {
+                e.preventDefault();
+                const text = commentInput.value.trim();
+                if (!text) return;
+                submitComment(text, commentTagSelect.value, false);
+                commentInput.value = '';
+                showToast("コメントを送信しました！", "fa-solid fa-paper-plane text-indigo-400");
+            });
+
+            // コメントフィルター切り替え
+            document.querySelectorAll('.comment-filter-btn').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    document.querySelectorAll('.comment-filter-btn').forEach(b => {
+                        b.classList.remove('bg-indigo-600', 'text-white');
+                        b.classList.add('text-slate-400');
+                    });
+                    btn.classList.add('bg-indigo-600', 'text-white');
+                    btn.classList.remove('text-slate-400');
+                    commentFilter = btn.getAttribute('data-filter');
+                    renderCommentList();
+                });
+            });
+
+            // 講義コード（ルーム）変更
+            const changeRoomBtn = document.getElementById('changeRoomBtn');
+            function applyRoomChange() {
+                const val = roomInput.value.trim().toUpperCase();
+                if (!val) return;
+                const oldRoom = currentRoom;
+                currentRoom = val;
+                roomInput.value = currentRoom;
+
+                if (mqttClient && mqttConnected) {
+                    try {
+                        mqttClient.unsubscribe(`lecturepulse/v2/${oldRoom}`);
+                        mqttClient.subscribe(`lecturepulse/v2/${currentRoom}`);
+                    } catch (e) {}
                 }
+
+                updateDashboardAndChart();
+                renderCommentList();
+                showToast(`講義ルーム「${currentRoom}」に入室しました`, "fa-solid fa-door-open text-emerald-400");
             }
-        }
-
-        function triggerDemoMode() {
-            const types = reactionTypes.map(r => r.id);
-            for (let i = 0; i < 15; i++) {
-                setTimeout(() => {
-                    const randomType = types[Math.floor(Math.random() * types.length)];
-                    receiveReaction(randomType);
-                }, i * 200);
-            }
-        }
-
-        function openQRModal() {
-            const modal = document.getElementById('qr-modal');
-            modal.classList.remove('hidden');
-
-            const currentUrl = window.location.href.split('?')[0] + `?room=${currentRoom}&role=student`;
-            document.getElementById('share-url-text').innerText = currentUrl;
-
-            const qrContainer = document.getElementById('qrcode-container');
-            qrContainer.innerHTML = `
-                <div class="text-center p-2">
-                    <div class="text-xs font-bold text-slate-800 mb-1">📷 スマホ用リンク</div>
-                    <div class="text-[10px] text-slate-600 break-all bg-slate-200 p-2 rounded">${currentUrl}</div>
-                </div>
-            `;
-        }
-        function closeQRModal() {
-            document.getElementById('qr-modal').classList.add('hidden');
-        }
-        function copyShareURL() {
-            const url = document.getElementById('share-url-text').innerText;
-            navigator.clipboard.writeText(url);
-            alert('参加用URLをコピーしました！');
-        }
-        function openStudentViewPreview() {
-            closeQRModal();
-            applyStudentLock();
-        }
-
-        function openReactionCustomizerModal() {
-            document.getElementById('customizer-modal').classList.remove('hidden');
-            renderCustomizerRows();
-        }
-        function closeReactionCustomizerModal() {
-            document.getElementById('customizer-modal').classList.add('hidden');
-        }
-        function renderCustomizerRows() {
-            const container = document.getElementById('customizer-rows-container');
-            container.innerHTML = '';
-            reactionTypes.forEach((rt, idx) => {
-                const div = document.createElement('div');
-                div.className = "bg-slate-900 p-3 rounded-xl border border-slate-700 flex items-center space-x-3";
-                div.innerHTML = `
-                    <input type="text" value="${rt.emoji}" id="cust-emoji-${idx}" class="w-12 bg-slate-800 text-center py-1 rounded text-lg border border-slate-600">
-                    <input type="text" value="${rt.name}" id="cust-name-${idx}" class="flex-1 bg-slate-800 px-3 py-1 rounded text-sm border border-slate-600 text-white">
-                    <button onclick="removeReactionType(${idx})" class="text-rose-400 hover:text-rose-300 text-sm px-2">削除</button>
-                `;
-                container.appendChild(div);
+            changeRoomBtn.addEventListener('click', applyRoomChange);
+            roomInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') applyRoomChange();
             });
-        }
-        function removeReactionType(idx) {
-            if (reactionTypes.length <= 2) {
-                alert('最低2つのリアクションボタンが必要です');
-                return;
-            }
-            reactionTypes.splice(idx, 1);
-            renderCustomizerRows();
-        }
-        function saveCustomReactions() {
-            reactionTypes.forEach((rt, idx) => {
-                const eInput = document.getElementById(`cust-emoji-${idx}`);
-                const nInput = document.getElementById(`cust-name-${idx}`);
-                if (eInput && nInput) {
-                    rt.emoji = eInput.value;
-                    rt.name = nInput.value;
-                }
-            });
-            renderStudentButtons();
-            closeReactionCustomizerModal();
 
-            if (mqttClient && mqttClient.connected) {
-                mqttClient.publish(`lecturepulse/${currentRoom}/config`, JSON.stringify({ reactionTypes }));
-            }
-            alert('設定を保存し、受講生画面に同期しました！');
-        }
-        function resetDefaultReactions() {
-            reactionTypes = [
-                { id: 'like', emoji: '👍', name: 'なるほど', color: 'bg-indigo-600 hover:bg-indigo-500 border-indigo-500', count: 0 },
-                { id: 'fire', emoji: '🔥', name: 'おもしろい', color: 'bg-amber-600 hover:bg-amber-500 border-amber-500', count: 0 },
-                { id: 'hard', emoji: '💦', name: 'むずかしい', color: 'bg-rose-600 hover:bg-rose-500 border-rose-500', count: 0 },
-                { id: 'hand', emoji: '✋', name: '質問あり', color: 'bg-emerald-600 hover:bg-emerald-500 border-emerald-500', count: 0 }
+            // QRコードモーダル制御
+            const qrModal = document.getElementById('qrModal');
+            document.getElementById('openQrModalBtn').addEventListener('click', () => {
+                renderRoomQrCode();
+                qrModal.classList.remove('hidden');
+                qrModal.classList.add('flex');
+            });
+            const closeQrModal = () => {
+                qrModal.classList.add('hidden');
+                qrModal.classList.remove('flex');
+            };
+            document.getElementById('closeQrModalBtn').addEventListener('click', closeQrModal);
+            document.getElementById('closeQrModalBtnBottom').addEventListener('click', closeQrModal);
+
+            // URL入力欄を書き換えたらQRコードもリアルタイム再生成
+            const shareUrlInput = document.getElementById('shareUrlInput');
+            shareUrlInput.addEventListener('input', () => {
+                const customVal = shareUrlInput.value.trim();
+                if (customVal) renderRoomQrCode(customVal);
+            });
+
+            // 共有URLコピー（iframe内でも確実に動作するexecCommand対応）
+            document.getElementById('copyShareUrlBtn').addEventListener('click', () => {
+                shareUrlInput.select();
+                document.execCommand('copy');
+                showToast("参加用URLをクリップボードにコピーしました！", "fa-solid fa-check text-emerald-400");
+            });
+
+            // QRコード画像の保存
+            document.getElementById('downloadQrBtn').addEventListener('click', () => {
+                const qrCanvas = document.querySelector('#qrCodeContainer canvas');
+                const qrImg = document.querySelector('#qrCodeContainer img');
+                const dataUrl = qrCanvas ? qrCanvas.toDataURL('image/png') : (qrImg ? qrImg.src : null);
+                if (!dataUrl) return;
+                const a = document.createElement('a');
+                a.href = dataUrl;
+                a.download = `QR_${currentRoom}.png`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                showToast("QRコード画像を保存しました", "fa-solid fa-download text-emerald-400");
+            });
+
+            // 単位時間（10秒 / 1分 / 5分）の切り替え
+            document.querySelectorAll('.bucket-btn').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    document.querySelectorAll('.bucket-btn').forEach(b => {
+                        b.classList.remove('bg-indigo-600', 'text-white');
+                        b.classList.add('text-slate-400');
+                    });
+                    btn.classList.add('bg-indigo-600', 'text-white');
+                    btn.classList.remove('text-slate-400');
+
+                    bucketSizeSeconds = parseInt(btn.getAttribute('data-bucket'), 10);
+                    updateDashboardAndChart();
+                });
+            });
+
+            // グラフ種類の切り替え
+            const toggleChartTypeBtn = document.getElementById('toggleChartTypeBtn');
+            toggleChartTypeBtn.addEventListener('click', () => {
+                chartType = (chartType === 'line') ? 'bar' : 'line';
+                timelineChart.config.type = chartType;
+                toggleChartTypeBtn.textContent = (chartType === 'line') ? '折れ線グラフ' : '棒グラフ';
+                timelineChart.update();
+            });
+
+            // サウンドON/OFF
+            const soundToggleBtn = document.getElementById('soundToggleBtn');
+            const soundIcon = document.getElementById('soundIcon');
+            soundToggleBtn.addEventListener('click', () => {
+                soundEnabled = !soundEnabled;
+                soundIcon.className = soundEnabled
+                    ? "fa-solid fa-volume-high text-sm text-emerald-400"
+                    : "fa-solid fa-volume-xmark text-sm text-slate-500";
+                showToast(soundEnabled ? "効果音をONにしました" : "効果音をミュートしました");
+            });
+
+            // 模擬アクセス（リアクションとコメントの両方をシミュレート）
+            const simBotBtn = document.getElementById('simBotBtn');
+            const simBotText = document.getElementById('simBotText');
+            const sampleComments = [
+                { text: "ここの具体例すごくわかりやすいです！", tag: "insight" },
+                { text: "さっきのグラフの縦軸は何を表していますか？", tag: "question" },
+                { text: "なるほど、そういう仕組みだったのか！", tag: "comment" },
+                { text: "少し進み方が速いのでもう一回お願いしたいです", tag: "help" },
+                { text: "テストに出そうな重要ポイントですね", tag: "insight" }
             ];
-            renderCustomizerRows();
-        }
 
-        function exportCSV() {
-            let csv = "Timestamp,ReactionType,Count\n";
-            reactionTypes.forEach(rt => {
-                csv += `AllTime,${rt.name},${rt.count}\n`;
+            simBotBtn.addEventListener('click', () => {
+                if (simBotInterval) {
+                    clearInterval(simBotInterval);
+                    simBotInterval = null;
+                    simBotText.textContent = "模擬アクセス: OFF";
+                    simBotBtn.classList.remove('bg-amber-500/30', 'border-amber-400');
+                    showToast("模擬アクセスを停止しました");
+                } else {
+                    simBotText.textContent = "模擬アクセス: 稼働中";
+                    simBotBtn.classList.add('bg-amber-500/30', 'border-amber-400');
+                    showToast("複数人の学生による同時リアクション＆コメントを開始しました！", "fa-solid fa-robot text-amber-400");
+                    
+                    const types = ['like', 'like', 'insight', 'bad', 'question'];
+                    let tick = 0;
+                    simBotInterval = setInterval(() => {
+                        tick++;
+                        const randomType = types[Math.floor(Math.random() * types.length)];
+                        triggerReaction(randomType, true);
+
+                        // 6回に1回程度模擬コメントも投稿
+                        if (tick % 6 === 0) {
+                            const sample = sampleComments[Math.floor(Math.random() * sampleComments.length)];
+                            submitComment(sample.text, sample.tag, true);
+                        }
+                    }, 850);
+                }
             });
-            const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `lecture_pulse_${currentRoom}_${Date.now()}.csv`;
-            a.click();
-        }
+
+            // CSVエクスポート（推移データ＋コメント一覧）
+            document.getElementById('exportCsvBtn').addEventListener('click', () => {
+                const labels = timelineChart.data.labels;
+                const dLike = timelineChart.data.datasets[0].data;
+                const dInsight = timelineChart.data.datasets[1].data;
+                const dBad = timelineChart.data.datasets[2].data;
+                const dQuestion = timelineChart.data.datasets[3].data;
+
+                let csvContent = "\uFEFF【単位時間別リアクション推移】\n時刻,講義コード,いいね,なるほど,Bad_むずかしい,少し速い_疑問,合計\n";
+                for (let i = 0; i < labels.length; i++) {
+                    const sum = dLike[i] + dInsight[i] + dBad[i] + dQuestion[i];
+                    csvContent += `${labels[i]},${currentRoom},${dLike[i]},${dInsight[i]},${dBad[i]},${dQuestion[i]},${sum}\n`;
+                }
+
+                const roomComments = allComments.filter(c => c.room === currentRoom);
+                csvContent += "\n【コメント・質問ログ】\n時刻,タグ,コメント内容,共感数\n";
+                roomComments.forEach(c => {
+                    const tStr = formatTimeLabel(c.timestamp, 10);
+                    const safeText = `"${(c.text || '').replace(/"/g, '""')}"`;
+                    csvContent += `${tStr},${c.tag},${safeText},${c.likes || 0}\n`;
+                });
+
+                const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `lecture_pulse_${currentRoom}.csv`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+                showToast("推移＆コメントのCSVをダウンロードしました", "fa-solid fa-file-csv text-emerald-400");
+            });
+
+            // データリセット確認モーダル
+            const confirmModal = document.getElementById('confirmModal');
+            document.getElementById('clearRoomDataBtn').addEventListener('click', () => {
+                document.getElementById('confirmRoomName').textContent = currentRoom;
+                confirmModal.classList.remove('hidden');
+                confirmModal.classList.add('flex');
+            });
+            document.getElementById('cancelClearBtn').addEventListener('click', () => {
+                confirmModal.classList.add('hidden');
+                confirmModal.classList.remove('flex');
+            });
+            document.getElementById('executeClearBtn').addEventListener('click', async () => {
+                confirmModal.classList.add('hidden');
+                confirmModal.classList.remove('flex');
+
+                const targetReactions = allReactions.filter(r => r.room === currentRoom);
+                allReactions = allReactions.filter(r => r.room !== currentRoom);
+                allComments = allComments.filter(c => c.room !== currentRoom);
+                updateDashboardAndChart();
+                renderCommentList();
+
+                if (db && currentUser) {
+                    for (const item of targetReactions) {
+                        if (item.id) {
+                            try {
+                                await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'lecture_reactions', item.id));
+                            } catch (e) {}
+                        }
+                    }
+                }
+                showToast(`講義ルーム「${currentRoom}」の記録をリセットしました`, "fa-solid fa-trash-can text-rose-400");
+            });
+
+            // GitHub公開ガイドモーダル制御
+            const githubModal = document.getElementById('githubModal');
+            document.getElementById('githubGuideBtn').addEventListener('click', () => {
+                githubModal.classList.remove('hidden');
+                githubModal.classList.add('flex');
+            });
+            const closeGithubModal = () => {
+                githubModal.classList.add('hidden');
+                githubModal.classList.remove('flex');
+            };
+            document.getElementById('closeGithubModalBtn').addEventListener('click', closeGithubModal);
+            document.getElementById('closeGithubModalBtnBottom').addEventListener('click', closeGithubModal);
+
+            // カスタムFirebase Configの適用
+            document.getElementById('applyCustomFirebaseBtn').addEventListener('click', () => {
+                const raw = document.getElementById('customFirebaseInput').value.trim();
+                if (!raw) return;
+                try {
+                    const parsed = JSON.parse(raw);
+                    initRealtimeSync(parsed);
+                    closeGithubModal();
+                    showToast("カスタムFirebase設定で接続しました！", "fa-solid fa-bolt text-emerald-400");
+                } catch (e) {
+                    showToast("JSONの形式が正しくありません。", "fa-solid fa-circle-exclamation text-rose-400");
+                }
+            });
+        });
     </script>
 </body>
 </html>
