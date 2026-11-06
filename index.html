@@ -1,64 +1,46 @@
 <!DOCTYPE html>
-<html lang="ja">
+<html lang="ja" class="dark">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>LecturePulse - リアルタイム講義リアクション＆分析</title>
+    <title>LecturePulse - リアルタイム講義リアクション＆推移分析</title>
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- Chart.js for Time-Series Visualization -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <!-- QRCode.js (クライアントサイド高解像度QRコード生成) -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
-    <!-- Paho MQTT (GitHub Pages / Netlify で設定不要のリアルタイム複数人同期用フォールバック) -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.1.0/paho-mqtt.min.js"></script>
+    <!-- MQTT.js (GitHub Pages / Netlify で複数端末を確実にリアルタイム集計するためのWebSocket通信ライブラリ) -->
+    <script src="https://unpkg.com/mqtt@5.3.4/dist/mqtt.min.js"></script>
     <!-- Font Awesome Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <!-- Google Fonts -->
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=Noto+Sans+JP:wght@400;500;700;900&display=swap" rel="stylesheet">
-
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;900&family=Noto+Sans+JP:wght@400;500;700;900&display=swap" rel="stylesheet">
     <style>
         body {
             font-family: 'Inter', 'Noto Sans JP', sans-serif;
             background-color: #0f172a;
             color: #f8fafc;
             overflow-x: hidden;
-            user-select: none;
-            /* 高解像度ディスプレイでの文字・UIぼやけ防止 */
             -webkit-font-smoothing: antialiased;
             -moz-osx-font-smoothing: grayscale;
-            text-rendering: optimizeLegibility;
         }
 
-        /* ゲーム風ボタンの立体スタイル */
-        .game-btn {
-            transition: transform 0.08s cubic-bezier(0.4, 0, 0.2, 1), top 0.08s cubic-bezier(0.4, 0, 0.2, 1);
-            position: relative;
-            top: 0;
-            touch-action: manipulation;
-        }
-        .game-btn:active {
-            top: 4px;
-            box-shadow: 0 0px 0 0 rgba(0,0,0,0.4) !important;
-            transform: scale(0.97);
-        }
-
-        /* フローティング絵文字アニメーション（drop-shadowを除外しGPU高解像度を維持） */
+        /* 浮遊するリアクション絵文字のアニメーション */
         @keyframes floatUp {
             0% {
-                transform: translate3d(0, 0, 0) scale(0.6) rotate(0deg);
+                transform: translate3d(0, 0, 0) scale(0.6);
                 opacity: 0;
             }
             15% {
-                transform: translate3d(0, -30px, 0) scale(1.15) rotate(-6deg);
+                transform: translate3d(0, -25px, 0) scale(1.15);
                 opacity: 1;
             }
-            50% {
-                transform: translate3d(0, -120px, 0) scale(1) rotate(6deg);
-                opacity: 0.95;
+            80% {
+                opacity: 0.9;
             }
             100% {
-                transform: translate3d(0, -260px, 0) scale(0.85) rotate(-4deg);
+                transform: translate3d(0, -220px, 0) scale(0.95);
                 opacity: 0;
             }
         }
@@ -67,7 +49,8 @@
             position: absolute;
             bottom: 20px;
             pointer-events: none;
-            animation: floatUp 2.1s cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards;
+            will-change: transform, opacity;
+            animation: floatUp 1.8s cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards;
             z-index: 30;
             text-shadow: 0 4px 8px rgba(0, 0, 0, 0.45);
         }
@@ -95,56 +78,46 @@
             right: 0;
             white-space: nowrap;
             pointer-events: none;
-            animation: slideComment 7.5s linear forwards;
+            will-change: transform, opacity;
+            animation: slideComment 7s linear forwards;
             z-index: 25;
         }
 
-        /* コンボポップアニメーション */
-        @keyframes comboPop {
-            0% { transform: scale(0.85); }
-            50% { transform: scale(1.2); }
-            100% { transform: scale(1); }
+        /* ゲーム風ボタンの押し込みアニメーション */
+        .game-btn {
+            transition: transform 0.08s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.12s ease;
+            user-select: none;
+            -webkit-tap-highlight-color: transparent;
         }
-        .combo-animate {
-            animation: comboPop 0.18s ease-out;
+        .game-btn:active {
+            transform: translateY(3px) scale(0.97);
         }
 
-        /* フィーバー時の背景エフェクト */
-        @keyframes feverPulse {
-            0%, 100% { box-shadow: inset 0 0 30px rgba(245, 158, 11, 0.15); }
-            50% { box-shadow: inset 0 0 60px rgba(236, 72, 153, 0.35); }
+        /* フィーバーゲージの輝き */
+        @keyframes pulseGlow {
+            0%, 100% { box-shadow: 0 0 15px rgba(245, 158, 11, 0.35); }
+            50% { box-shadow: 0 0 28px rgba(239, 68, 68, 0.7); }
         }
         .fever-mode {
-            animation: feverPulse 1.5s infinite;
+            animation: pulseGlow 1.5s infinite;
             border-color: #f59e0b !important;
-        }
-
-        /* QRコード画像のシャープ表示 */
-        #qrCodeContainer img, #qrCodeContainer canvas {
-            margin: 0 auto;
-            image-rendering: -webkit-optimize-contrast;
-            image-rendering: crisp-edges;
-            border-radius: 8px;
         }
 
         /* カスタムスクロールバー */
         ::-webkit-scrollbar {
-            width: 8px;
-            height: 8px;
+            width: 6px;
+            height: 6px;
         }
         ::-webkit-scrollbar-track {
             background: #1e293b;
         }
         ::-webkit-scrollbar-thumb {
             background: #475569;
-            border-radius: 4px;
-        }
-        ::-webkit-scrollbar-thumb:hover {
-            background: #64748b;
+            border-radius: 3px;
         }
     </style>
 </head>
-<body class="min-h-screen flex flex-col bg-gradient-to-br from-slate-900 via-slate-800 to-indigo-950">
+<body class="min-h-screen flex flex-col bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950">
 
     <!-- ナビゲーションヘッダー -->
     <header class="border-b border-slate-700/80 bg-slate-900/95 sticky top-0 z-40">
@@ -159,50 +132,32 @@
                         <h1 class="text-lg md:text-xl font-black tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-white via-indigo-200 to-indigo-400">
                             LecturePulse
                         </h1>
-                        <span id="syncStatusBadge" class="text-[11px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 flex items-center gap-1">
-                            <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-                            LIVE同期中
+                        <span id="syncStatusBadge" class="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30 flex items-center gap-1.5">
+                            <span class="w-2 h-2 rounded-full bg-amber-400 animate-pulse"></span>
+                            接続中...
                         </span>
                     </div>
                     <p class="text-xs text-slate-400 hidden sm:block">大学講義リアルタイム・リアクション＆コメント推移システム</p>
                 </div>
             </div>
 
-            <!-- ルーム（講義コード）設定＆コントロール -->
-            <div class="flex flex-wrap items-center gap-2">
-                <!-- 講義ルーム切り替え -->
-                <div class="flex items-center bg-slate-800 border border-slate-700 rounded-xl px-2.5 py-1.5">
-                    <i class="fa-solid fa-chalkboard-user text-indigo-400 text-xs mr-1.5"></i>
-                    <span class="text-xs text-slate-400 mr-1.5 hidden sm:inline">講義:</span>
-                    <input id="roomInput" type="text" value="LEC-101" maxlength="15"
-                        class="bg-transparent text-sm font-bold text-white w-20 sm:w-24 focus:outline-none border-b border-dashed border-slate-500 focus:border-indigo-400 uppercase"
-                        title="同じ講義コードを入力した人とリアルタイム共有されます">
-                    <button id="changeRoomBtn" class="ml-1.5 text-xs bg-indigo-600 hover:bg-indigo-500 text-white font-semibold px-2.5 py-1 rounded-lg transition">
-                        入室
-                    </button>
-                </div>
+            <!-- シンプル化したヘッダーコントロール -->
+            <div class="flex items-center gap-2">
+                <!-- オンライン接続状態の再同期ボタン -->
+                <button id="syncRequestBtn" type="button" class="flex items-center gap-1.5 text-xs font-bold px-3 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition" title="他の端末と最新の集計データを同期します">
+                    <i class="fa-solid fa-rotate text-indigo-400"></i>
+                    <span class="hidden sm:inline">データ同期</span>
+                </button>
 
-                <!-- QRコード共有ボタン（新規追加・確実に生成） -->
-                <button id="openQrModalBtn" class="flex items-center gap-1.5 text-xs font-bold px-3 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white shadow-md shadow-indigo-600/20 transition" title="学生に共有するためのQRコードを表示します">
+                <!-- QRコード共有ボタン -->
+                <button id="openQrModalBtn" type="button" class="flex items-center gap-1.5 text-xs font-bold px-3.5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white shadow-md shadow-indigo-600/20 transition" title="学生に共有するためのQRコードを表示します">
                     <i class="fa-solid fa-qrcode text-sm"></i>
-                    <span>QRコード</span>
+                    <span>QRコード共有</span>
                 </button>
 
                 <!-- 効果音トグル -->
-                <button id="soundToggleBtn" class="p-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition" title="効果音のON/OFF">
+                <button id="soundToggleBtn" type="button" class="p-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition" title="効果音のON/OFF">
                     <i id="soundIcon" class="fa-solid fa-volume-high text-sm text-emerald-400"></i>
-                </button>
-
-                <!-- シミュレーション（デモ用ボット）ボタン -->
-                <button id="simBotBtn" class="flex items-center gap-1.5 text-xs font-bold px-3 py-2.5 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 transition" title="複数人の学生からのリアクションとコメントを擬似体験します">
-                    <i class="fa-solid fa-robot"></i>
-                    <span id="simBotText" class="hidden md:inline">模擬アクセス: OFF</span>
-                </button>
-
-                <!-- GitHub公開ガイドボタン -->
-                <button id="githubGuideBtn" class="flex items-center gap-1.5 text-xs font-bold px-3 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-white border border-slate-600 transition">
-                    <i class="fa-brands fa-github text-base"></i>
-                    <span class="hidden sm:inline">サイト化設定</span>
                 </button>
             </div>
         </div>
@@ -210,234 +165,187 @@
 
     <!-- メインコンテンツ -->
     <main class="flex-1 max-w-7xl w-full mx-auto px-4 py-5 grid grid-cols-1 lg:grid-cols-12 gap-6">
-        
-        <!-- 左カラム：リアクション・ゲームステージ＆コメント投稿（5カラム幅） -->
+
+        <!-- 左カラム：リアクションステージ＆コメント送信 (5カラム) -->
         <section class="lg:col-span-5 flex flex-col gap-5">
-            
-            <!-- ライブ・リアクション画面（フローティングステージ） -->
-            <div id="liveStage" class="relative bg-slate-900 border-2 border-slate-700/80 rounded-2xl p-5 flex flex-col justify-between min-h-[320px] sm:min-h-[350px] overflow-hidden shadow-2xl transition-colors duration-500">
-                
-                <!-- 上部ステータス：盛り上がりのボルテージ（Fever Gauge） -->
-                <div class="relative z-20">
-                    <div class="flex items-center justify-between mb-1.5">
-                        <div class="flex items-center gap-2">
-                            <span id="feverBadge" class="text-xs font-extrabold uppercase tracking-wider px-2.5 py-0.5 rounded-md bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
-                                <i class="fa-solid fa-fire-flame-curved mr-1"></i>講義の盛り上がり度
-                            </span>
-                            <span id="rpmDisplay" class="text-xs text-slate-400 font-mono">0 react/10s</span>
-                        </div>
-                        <!-- コンボカウンター -->
-                        <div id="comboContainer" class="opacity-0 transition-opacity duration-300 flex items-center gap-1 bg-gradient-to-r from-amber-500 to-pink-500 text-white text-xs font-black px-2.5 py-0.5 rounded-full shadow-lg">
-                            <span id="comboCount">0</span>
-                            <span>COMBO!</span>
-                        </div>
+
+            <!-- ライブステージ＆盛り上がり度ゲージ -->
+            <div id="liveStage" class="relative h-60 sm:h-64 rounded-2xl bg-gradient-to-b from-slate-900 via-indigo-950/40 to-slate-900 border-2 border-slate-700/80 shadow-xl overflow-hidden flex flex-col justify-between p-4">
+                <!-- 上部：フィーバーゲージ -->
+                <div class="z-20 bg-slate-900/85 border border-slate-700/70 rounded-xl p-2.5">
+                    <div class="flex items-center justify-between text-xs font-bold mb-1.5">
+                        <span id="feverBadge" class="text-amber-400">
+                            <i class="fa-solid fa-fire-flame-curved mr-1"></i>講義の盛り上がり度
+                        </span>
+                        <span id="rpmDisplay" class="text-slate-300 font-mono">0 react / 10秒</span>
                     </div>
-                    <!-- ボルテージプログレスバー -->
-                    <div class="w-full h-3 bg-slate-800 rounded-full overflow-hidden p-0.5 border border-slate-700">
-                        <div id="voltageBar" class="h-full w-0 rounded-full bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 transition-all duration-300"></div>
+                    <div class="w-full h-2.5 bg-slate-800 rounded-full overflow-hidden">
+                        <div id="voltageBar" class="h-full w-0 bg-gradient-to-r from-indigo-500 via-amber-400 to-rose-500 transition-all duration-300 rounded-full"></div>
                     </div>
                 </div>
 
-                <!-- 中央メッセージ＆フローティングエリア -->
-                <div class="my-auto text-center relative z-10 pointer-events-none py-4">
-                    <div id="stageCenterIcon" class="text-5xl mb-2 transition-transform duration-150">🎓</div>
-                    <h2 id="stageStatusTitle" class="text-base sm:text-lg font-bold text-slate-100">ボタンを押して講義にリアクション！</h2>
-                    <p id="stageStatusSub" class="text-xs text-slate-400 mt-1">何回でも連打OK！コメントも画面に流れます</p>
+                <!-- 浮遊する絵文字＆流れるコメントのレイヤー -->
+                <div id="floatingContainer" class="absolute inset-0 overflow-hidden pointer-events-none"></div>
+
+                <!-- 中央ステータス表示 -->
+                <div class="my-auto text-center z-10 pointer-events-none select-none">
+                    <div id="stageCenterIcon" class="text-4xl sm:text-5xl mb-1.5 transition-transform duration-200">🎓</div>
+                    <p id="stageStatusTitle" class="text-xs sm:text-sm font-bold text-slate-200">ボタンを押して講義にリアクション！</p>
                 </div>
 
-                <!-- フローティング絵文字＆流れるコメントが生成されるコンテナ -->
-                <div id="floatingContainer" class="absolute inset-0 overflow-hidden pointer-events-none z-20"></div>
-
-                <!-- 下部：現在のルームのリアルタイム累計カウンター -->
-                <div class="relative z-20 grid grid-cols-4 gap-2 pt-3 border-t border-slate-800 bg-slate-900/90 rounded-xl p-2">
-                    <div class="text-center">
-                        <div class="text-xs text-emerald-400 font-bold">👍 いいね</div>
-                        <div id="count-like" class="text-lg font-black text-white">0</div>
+                <!-- 下部：コンボ表示＆弾幕ON/OFF -->
+                <div class="z-20 flex items-center justify-between">
+                    <div id="comboContainer" class="opacity-0 transition-opacity duration-200 bg-amber-500/20 border border-amber-400/50 text-amber-300 px-3 py-1 rounded-full text-xs font-black">
+                        <span id="comboCount">0</span> COMBO!
                     </div>
-                    <div class="text-center">
-                        <div class="text-xs text-amber-400 font-bold">💡 なるほど</div>
-                        <div id="count-insight" class="text-lg font-black text-white">0</div>
-                    </div>
-                    <div class="text-center">
-                        <div class="text-xs text-rose-400 font-bold">🤔 Bad/難</div>
-                        <div id="count-bad" class="text-lg font-black text-white">0</div>
-                    </div>
-                    <div class="text-center">
-                        <div class="text-xs text-sky-400 font-bold">❓ 質問/速い</div>
-                        <div id="count-question" class="text-lg font-black text-white">0</div>
-                    </div>
+                    <label class="flex items-center gap-1.5 text-[11px] text-slate-300 cursor-pointer bg-slate-900/80 px-2.5 py-1 rounded-lg border border-slate-700/70 ml-auto">
+                        <input id="danmakuToggle" type="checkbox" checked class="accent-indigo-500 rounded">
+                        <span>コメント弾幕を表示</span>
+                    </label>
                 </div>
             </div>
 
-            <!-- ゲーム風リアクション・ボタンパッド（無制限連打対応） -->
-            <div class="bg-slate-900 border border-slate-700/80 rounded-2xl p-4 shadow-xl">
+            <!-- リアクションボタンパッド -->
+            <div class="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 shadow-xl">
                 <div class="flex items-center justify-between mb-3">
-                    <span class="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
-                        <i class="fa-solid fa-gamepad text-indigo-400"></i> リアクション・パッド（回数無制限・キー1〜4対応）
-                    </span>
-                    <span id="mySentCountBadge" class="text-[11px] font-bold px-2 py-0.5 rounded bg-slate-800 text-indigo-300 border border-slate-700">
-                        自分の送信数: 0回
-                    </span>
+                    <h2 class="text-sm font-black text-white flex items-center gap-2">
+                        <i class="fa-solid fa-gamepad text-indigo-400"></i>
+                        リアクションパッド
+                        <span class="text-[11px] font-normal text-slate-400 hidden sm:inline">（数字キー 1〜4 でも連打可能）</span>
+                    </h2>
+                    <div class="flex items-center gap-2">
+                        <span id="mySentCountBadge" class="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
+                            自分の送信数: 0回
+                        </span>
+                        <span id="userIdDisplay" class="text-[10px] text-slate-500 font-mono hidden sm:inline">ID: ---</span>
+                    </div>
                 </div>
 
-                <div class="grid grid-cols-2 gap-3.5">
-                    <!-- 1: いいね！ (Positive) -->
-                    <button type="button" data-type="like" class="reaction-btn game-btn group flex flex-col items-center justify-center p-4 rounded-2xl bg-gradient-to-b from-emerald-500 to-emerald-600 hover:from-emerald-400 hover:to-emerald-500 text-white border-t border-emerald-300/40" style="box-shadow: 0 5px 0 0 #065f46;">
-                        <div class="flex items-center gap-2 mb-1">
-                            <span class="text-3xl group-hover:scale-110 transition-transform">👍</span>
-                            <span class="text-lg font-black tracking-wide">いいね！</span>
-                        </div>
-                        <span class="text-[11px] text-emerald-100 font-medium">理解できた・賛成 [Key: 1]</span>
+                <div class="grid grid-cols-2 gap-3">
+                    <!-- 1: いいね！ -->
+                    <button type="button" data-type="like" class="reaction-btn game-btn group relative flex flex-col items-center justify-center p-4 rounded-2xl bg-gradient-to-b from-emerald-600/25 to-emerald-900/40 hover:from-emerald-500/35 hover:to-emerald-800/50 border-2 border-emerald-500/50 shadow-lg text-left">
+                        <span class="absolute top-2 left-2.5 text-[10px] font-mono text-emerald-300/70 bg-emerald-950/80 px-1.5 py-0.5 rounded">Key 1</span>
+                        <span id="count-like" class="absolute top-2 right-2.5 text-xs font-black px-2 py-0.5 rounded-full bg-emerald-500/30 text-emerald-200">0</span>
+                        <span class="text-3xl sm:text-4xl mb-1.5 group-hover:scale-110 transition-transform">👍</span>
+                        <span class="text-sm font-black text-emerald-100">いいね！</span>
+                        <span class="text-[11px] text-emerald-300/80">わかりやすい・共感</span>
                     </button>
 
-                    <!-- 2: なるほど！ (Insight) -->
-                    <button type="button" data-type="insight" class="reaction-btn game-btn group flex flex-col items-center justify-center p-4 rounded-2xl bg-gradient-to-b from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-white border-t border-amber-300/40" style="box-shadow: 0 5px 0 0 #92400e;">
-                        <div class="flex items-center gap-2 mb-1">
-                            <span class="text-3xl group-hover:scale-110 transition-transform">💡</span>
-                            <span class="text-lg font-black tracking-wide">なるほど</span>
-                        </div>
-                        <span class="text-[11px] text-amber-100 font-medium">面白い・重要発見 [Key: 2]</span>
+                    <!-- 2: なるほど -->
+                    <button type="button" data-type="insight" class="reaction-btn game-btn group relative flex flex-col items-center justify-center p-4 rounded-2xl bg-gradient-to-b from-amber-500/25 to-amber-900/40 hover:from-amber-400/35 hover:to-amber-800/50 border-2 border-amber-500/50 shadow-lg text-left">
+                        <span class="absolute top-2 left-2.5 text-[10px] font-mono text-amber-300/70 bg-amber-950/80 px-1.5 py-0.5 rounded">Key 2</span>
+                        <span id="count-insight" class="absolute top-2 right-2.5 text-xs font-black px-2 py-0.5 rounded-full bg-amber-500/30 text-amber-200">0</span>
+                        <span class="text-3xl sm:text-4xl mb-1.5 group-hover:scale-110 transition-transform">💡</span>
+                        <span class="text-sm font-black text-amber-100">なるほど</span>
+                        <span class="text-[11px] text-amber-300/80">重要な発見・納得</span>
                     </button>
 
-                    <!-- 3: Bad / むずかしい (Negative / Confused) -->
-                    <button type="button" data-type="bad" class="reaction-btn game-btn group flex flex-col items-center justify-center p-4 rounded-2xl bg-gradient-to-b from-rose-500 to-rose-600 hover:from-rose-400 hover:to-rose-500 text-white border-t border-rose-300/40" style="box-shadow: 0 5px 0 0 #9f1239;">
-                        <div class="flex items-center gap-2 mb-1">
-                            <span class="text-3xl group-hover:scale-110 transition-transform">🤔</span>
-                            <span class="text-lg font-black tracking-wide">Bad / 難</span>
-                        </div>
-                        <span class="text-[11px] text-rose-100 font-medium">わからない・迷子 [Key: 3]</span>
+                    <!-- 3: Bad / 難 -->
+                    <button type="button" data-type="bad" class="reaction-btn game-btn group relative flex flex-col items-center justify-center p-4 rounded-2xl bg-gradient-to-b from-rose-600/25 to-rose-900/40 hover:from-rose-500/35 hover:to-rose-800/50 border-2 border-rose-500/50 shadow-lg text-left">
+                        <span class="absolute top-2 left-2.5 text-[10px] font-mono text-rose-300/70 bg-rose-950/80 px-1.5 py-0.5 rounded">Key 3</span>
+                        <span id="count-bad" class="absolute top-2 right-2.5 text-xs font-black px-2 py-0.5 rounded-full bg-rose-500/30 text-rose-200">0</span>
+                        <span class="text-3xl sm:text-4xl mb-1.5 group-hover:scale-110 transition-transform">🤔</span>
+                        <span class="text-sm font-black text-rose-100">Bad / 難</span>
+                        <span class="text-[11px] text-rose-300/80">むずかしい・もう一度</span>
                     </button>
 
-                    <!-- 4: 待って / 質問 (Speed / Question) -->
-                    <button type="button" data-type="question" class="reaction-btn game-btn group flex flex-col items-center justify-center p-4 rounded-2xl bg-gradient-to-b from-sky-500 to-sky-600 hover:from-sky-400 hover:to-sky-500 text-white border-t border-sky-300/40" style="box-shadow: 0 5px 0 0 #075985;">
-                        <div class="flex items-center gap-2 mb-1">
-                            <span class="text-3xl group-hover:scale-110 transition-transform">❓</span>
-                            <span class="text-lg font-black tracking-wide">少し速い/疑問</span>
-                        </div>
-                        <span class="text-[11px] text-sky-100 font-medium">もう一回説明して [Key: 4]</span>
+                    <!-- 4: 少し速い / 疑問 -->
+                    <button type="button" data-type="question" class="reaction-btn game-btn group relative flex flex-col items-center justify-center p-4 rounded-2xl bg-gradient-to-b from-sky-600/25 to-sky-900/40 hover:from-sky-500/35 hover:to-sky-800/50 border-2 border-sky-500/50 shadow-lg text-left">
+                        <span class="absolute top-2 left-2.5 text-[10px] font-mono text-sky-300/70 bg-sky-950/80 px-1.5 py-0.5 rounded">Key 4</span>
+                        <span id="count-question" class="absolute top-2 right-2.5 text-xs font-black px-2 py-0.5 rounded-full bg-sky-500/30 text-sky-200">0</span>
+                        <span class="text-3xl sm:text-4xl mb-1.5 group-hover:scale-110 transition-transform">❓</span>
+                        <span class="text-sm font-black text-sky-100">少し速い/疑問</span>
+                        <span class="text-[11px] text-sky-300/80">ペース・質問あり</span>
                     </button>
                 </div>
             </div>
 
-            <!-- 新規追加：ライブコメント・質問投稿フォーム -->
-            <div class="bg-slate-900 border border-slate-700/80 rounded-2xl p-4 shadow-xl">
-                <div class="flex items-center justify-between mb-2.5">
-                    <span class="text-xs font-bold text-slate-300 flex items-center gap-1.5">
-                        <i class="fa-solid fa-comment-dots text-indigo-400"></i> 講義へコメント・質問を送る（匿名）
-                    </span>
-                    <span id="userIdDisplay" class="text-[11px] text-slate-500 font-mono truncate max-w-[140px]">ID: connecting...</span>
-                </div>
+            <!-- ライブコメント・質問投稿フォーム -->
+            <div class="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 shadow-xl">
+                <h2 class="text-sm font-black text-white flex items-center gap-2 mb-3">
+                    <i class="fa-solid fa-comment-dots text-indigo-400"></i>
+                    ライブコメント・質問を投稿
+                </h2>
                 <form id="commentForm" class="flex flex-col gap-2.5">
                     <div class="flex gap-2">
-                        <select id="commentTagSelect" class="bg-slate-800 border border-slate-700 text-xs font-bold text-white rounded-xl px-2.5 py-2.5 focus:outline-none focus:border-indigo-500">
+                        <select id="commentTagSelect" class="bg-slate-800 border border-slate-700 rounded-xl px-2.5 py-2 text-xs text-white font-bold focus:outline-none focus:border-indigo-500">
                             <option value="comment">💬 つぶやき</option>
                             <option value="question">❓ 質問</option>
                             <option value="insight">💡 気づき</option>
                             <option value="help">🆘 ヘルプ</option>
                         </select>
-                        <input id="commentInput" type="text" maxlength="80" placeholder="質問や感想を入力（例：さっきの式の意味をもう一度知りたいです）"
-                            class="flex-1 bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500">
+                        <input id="commentInput" type="text" maxlength="100" placeholder="講義の感想や質問を匿名で書き込む..."
+                            class="flex-1 bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-xs sm:text-sm text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500">
                     </div>
-                    <div class="flex items-center justify-between">
-                        <label class="flex items-center gap-1.5 text-xs text-slate-400 cursor-pointer">
-                            <input id="danmakuToggle" type="checkbox" checked class="rounded bg-slate-800 border-slate-600 text-indigo-500 focus:ring-0">
-                            <span>ステージ画面にコメントを流す</span>
-                        </label>
-                        <button type="submit" class="bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white text-xs font-bold px-4 py-2 rounded-xl shadow-md shadow-indigo-600/30 transition flex items-center gap-1.5">
-                            <i class="fa-solid fa-paper-plane"></i> コメント送信
-                        </button>
-                    </div>
+                    <button type="submit" class="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs sm:text-sm py-2.5 rounded-xl shadow-md shadow-indigo-600/20 transition flex items-center justify-center gap-2">
+                        <i class="fa-solid fa-paper-plane"></i>
+                        <span>コメントを送信して共有</span>
+                    </button>
                 </form>
             </div>
-
         </section>
 
-        <!-- 右カラム：単位時間あたりの集計＆リアルタイム推移グラフ＆コメント一覧（7カラム幅） -->
+        <!-- 右カラム：単位時間ごとの推移グラフ＆コメントログ (7カラム) -->
         <section class="lg:col-span-7 flex flex-col gap-5">
-            
-            <!-- 推移グラフカード -->
-            <div class="bg-slate-900 border border-slate-700/80 rounded-2xl p-5 shadow-2xl flex flex-col justify-between">
-                
-                <!-- グラフヘッダー＆単位時間切り替え -->
-                <div class="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-slate-800">
+
+            <!-- 単位時間ごとのリアクション推移グラフカード -->
+            <div class="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 sm:p-5 shadow-xl flex flex-col">
+                <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
                     <div>
-                        <h2 class="text-base sm:text-lg font-bold text-white flex items-center gap-2">
+                        <h2 class="text-base font-black text-white flex items-center gap-2">
                             <i class="fa-solid fa-chart-line text-indigo-400"></i>
                             単位時間あたりのリアクション推移
                         </h2>
-                        <p class="text-xs text-slate-400">講義の時間経過に伴う「理解度」や「疑問点」の波を高精細グラフで可視化します</p>
+                        <p class="text-xs text-slate-400">講義中のどの時間帯にどの反応が集中したかをリアルタイム集計</p>
                     </div>
 
-                    <!-- 集計単位時間セレクター -->
+                    <!-- 集計単位時間切り替えボタン -->
                     <div class="flex items-center bg-slate-800 p-1 rounded-xl border border-slate-700">
-                        <button type="button" data-bucket="10" class="bucket-btn px-3 py-1.5 rounded-lg text-xs font-bold bg-indigo-600 text-white transition">
-                            10秒単位 <span class="hidden sm:inline text-[10px] opacity-80">(直近3分)</span>
+                        <button type="button" data-bucket="10" class="bucket-btn text-xs font-bold px-3 py-1.5 rounded-lg bg-indigo-600 text-white transition">
+                            10秒単位
                         </button>
-                        <button type="button" data-bucket="60" class="bucket-btn px-3 py-1.5 rounded-lg text-xs font-bold text-slate-400 hover:text-white transition">
-                            1分単位 <span class="hidden sm:inline text-[10px] opacity-80">(直近20分)</span>
+                        <button type="button" data-bucket="60" class="bucket-btn text-xs font-bold px-3 py-1.5 rounded-lg text-slate-400 hover:text-white transition">
+                            1分単位
                         </button>
-                        <button type="button" data-bucket="300" class="bucket-btn px-3 py-1.5 rounded-lg text-xs font-bold text-slate-400 hover:text-white transition">
-                            5分単位 <span class="hidden sm:inline text-[10px] opacity-80">(90分講義)</span>
+                        <button type="button" data-bucket="300" class="bucket-btn text-xs font-bold px-3 py-1.5 rounded-lg text-slate-400 hover:text-white transition">
+                            5分単位
                         </button>
                     </div>
                 </div>
 
-                <!-- Chart.js キャンバスラッパー -->
-                <div class="relative w-full h-[250px] sm:h-[280px] my-3">
+                <!-- ピーク時間＆理解度サマリー -->
+                <div class="grid grid-cols-3 gap-2.5 mb-4">
+                    <div class="bg-slate-800/70 border border-slate-700/70 rounded-xl p-2.5">
+                        <span class="text-[11px] text-slate-400 block">👍💡 ポジティブ最多時間</span>
+                        <strong id="positivePeakTime" class="text-xs sm:text-sm text-emerald-400 font-bold">記録なし</strong>
+                    </div>
+                    <div class="bg-slate-800/70 border border-slate-700/70 rounded-xl p-2.5">
+                        <span class="text-[11px] text-slate-400 block">🤔❓ 疑問・難 最多時間</span>
+                        <strong id="negativePeakTime" class="text-xs sm:text-sm text-rose-400 font-bold">記録なし</strong>
+                    </div>
+                    <div class="bg-slate-800/70 border border-slate-700/70 rounded-xl p-2.5">
+                        <span class="text-[11px] text-slate-400 block">📊 納得・ポジティブ率</span>
+                        <strong id="positiveRatioText" class="text-xs sm:text-sm text-indigo-300 font-bold">-- %</strong>
+                    </div>
+                </div>
+
+                <!-- グラフCanvasラッパー -->
+                <div class="relative w-full h-64 sm:h-72 bg-slate-950/60 rounded-xl p-2 border border-slate-800/80">
                     <canvas id="timelineChart"></canvas>
                 </div>
 
-                <!-- 講義インサイト＆ピークタイム自動分析 -->
-                <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-3 border-t border-slate-800">
-                    <!-- 理解度バランス -->
-                    <div class="bg-slate-800/70 border border-slate-700/70 rounded-xl p-3 flex items-center gap-3">
-                        <div class="w-10 h-10 rounded-lg bg-emerald-500/20 text-emerald-400 flex items-center justify-center text-lg font-bold">
-                            <i class="fa-solid fa-face-smile"></i>
-                        </div>
-                        <div>
-                            <div class="text-[11px] text-slate-400">ポジティブ反応率</div>
-                            <div id="positiveRatioText" class="text-base font-black text-emerald-300">-- %</div>
-                        </div>
-                    </div>
-
-                    <!-- 最も盛り上がった時間 -->
-                    <div class="bg-slate-800/70 border border-slate-700/70 rounded-xl p-3 flex items-center gap-3">
-                        <div class="w-10 h-10 rounded-lg bg-amber-500/20 text-amber-400 flex items-center justify-center text-lg font-bold">
-                            <i class="fa-solid fa-crown"></i>
-                        </div>
-                        <div>
-                            <div class="text-[11px] text-slate-400">いいね・納得ピーク</div>
-                            <div id="positivePeakTime" class="text-sm font-bold text-white">記録なし</div>
-                        </div>
-                    </div>
-
-                    <!-- 最も「むずかしい/Bad」が多かった時間 -->
-                    <div class="bg-slate-800/70 border border-slate-700/70 rounded-xl p-3 flex items-center gap-3">
-                        <div class="w-10 h-10 rounded-lg bg-rose-500/20 text-rose-400 flex items-center justify-center text-lg font-bold">
-                            <i class="fa-solid fa-triangle-exclamation"></i>
-                        </div>
-                        <div>
-                            <div class="text-[11px] text-slate-400">Bad・疑問ピーク (要復習)</div>
-                            <div id="negativePeakTime" class="text-sm font-bold text-white">記録なし</div>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- データ管理・CSV出力フッター -->
+                <!-- データ管理フッター -->
                 <div class="flex flex-wrap items-center justify-between gap-2 mt-4 pt-3 border-t border-slate-800/80">
                     <div class="text-xs text-slate-400 flex items-center gap-2">
-                        <span>総リアクション: <strong id="totalReactionsCount" class="text-white">0</strong> 件</span>
+                        <span>全体の総リアクション: <strong id="totalReactionsCount" class="text-white">0</strong> 件</span>
                         <span class="text-slate-600">|</span>
-                        <span>形式:</span>
+                        <span>グラフ形式:</span>
                         <button type="button" id="toggleChartTypeBtn" class="text-indigo-400 hover:text-indigo-300 font-semibold underline">
                             折れ線グラフ
                         </button>
                     </div>
 
                     <div class="flex items-center gap-2">
-                        <button type="button" id="exportCsvBtn" class="text-xs bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold px-3 py-1.5 rounded-lg border border-slate-700 transition flex items-center gap-1.5">
-                            <i class="fa-solid fa-file-csv text-emerald-400"></i> CSV出力
-                        </button>
                         <button type="button" id="clearRoomDataBtn" class="text-xs bg-rose-950/60 hover:bg-rose-900/80 text-rose-300 font-semibold px-3 py-1.5 rounded-lg border border-rose-800/50 transition flex items-center gap-1.5">
                             <i class="fa-solid fa-trash-can"></i> 記録リセット
                         </button>
@@ -445,51 +353,51 @@
                 </div>
             </div>
 
-            <!-- 新規追加：リアルタイム・コメント＆質問タイムライン一覧 -->
-            <div class="bg-slate-900 border border-slate-700/80 rounded-2xl p-5 shadow-2xl flex-1 flex flex-col">
-                <div class="flex items-center justify-between pb-3 border-b border-slate-800">
+            <!-- リアルタイム・コメント＆質問タイムライン一覧 -->
+            <div class="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 sm:p-5 shadow-xl flex-1 flex flex-col">
+                <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
                     <div class="flex items-center gap-2">
-                        <h3 class="text-base font-bold text-white flex items-center gap-2">
+                        <h2 class="text-base font-black text-white flex items-center gap-2">
                             <i class="fa-solid fa-comments text-indigo-400"></i>
                             みんなのコメント・質問ログ
-                        </h3>
-                        <span id="commentCountBadge" class="text-xs font-bold px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
+                        </h2>
+                        <span id="commentCountBadge" class="text-xs font-bold px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 border border-slate-700">
                             0件
                         </span>
                     </div>
 
-                    <!-- フィルタボタン -->
-                    <div class="flex items-center gap-1 bg-slate-800 p-1 rounded-lg border border-slate-700 text-xs">
-                        <button type="button" data-filter="all" class="comment-filter-btn px-2.5 py-1 rounded bg-indigo-600 text-white font-bold transition">すべて</button>
-                        <button type="button" data-filter="question" class="comment-filter-btn px-2.5 py-1 rounded text-slate-400 hover:text-white font-bold transition">❓ 質問のみ</button>
+                    <!-- コメントフィルターボタン -->
+                    <div class="flex items-center gap-1 bg-slate-800 p-1 rounded-xl border border-slate-700">
+                        <button type="button" data-filter="all" class="comment-filter-btn text-[11px] font-bold px-2.5 py-1 rounded-lg bg-indigo-600 text-white transition">すべて</button>
+                        <button type="button" data-filter="question" class="comment-filter-btn text-[11px] font-bold px-2.5 py-1 rounded-lg text-slate-400 hover:text-white transition">❓質問</button>
+                        <button type="button" data-filter="insight" class="comment-filter-btn text-[11px] font-bold px-2.5 py-1 rounded-lg text-slate-400 hover:text-white transition">💡気づき</button>
+                        <button type="button" data-filter="help" class="comment-filter-btn text-[11px] font-bold px-2.5 py-1 rounded-lg text-slate-400 hover:text-white transition">🆘ヘルプ</button>
                     </div>
                 </div>
 
-                <!-- コメントリスト表示領域 -->
-                <div id="commentListContainer" class="mt-3 space-y-2.5 max-h-[240px] overflow-y-auto pr-1 flex-1">
+                <div id="commentListContainer" class="space-y-2.5 max-h-72 overflow-y-auto pr-1">
                     <div class="text-center py-8 text-slate-500 text-xs">
-                        まだコメントはありません。左下のフォームから最初のコメントや質問を送ってみましょう！
+                        表示できるコメントはありません。講義の感想や疑問を気軽に書き込んでみましょう！
                     </div>
                 </div>
             </div>
 
         </section>
-
     </main>
 
-    <!-- トースト通知（アラート代替） -->
-    <div id="toastNotification" class="fixed bottom-5 right-5 z-50 transform translate-y-20 opacity-0 transition-all duration-300 pointer-events-none bg-slate-800 border border-indigo-500/50 text-white px-4 py-3 rounded-xl shadow-2xl flex items-center gap-3">
+    <!-- トースト通知 -->
+    <div id="toastNotification" class="fixed bottom-5 right-5 z-50 transform translate-y-20 opacity-0 transition-all duration-300 pointer-events-none bg-slate-900 border border-slate-700 text-white px-4 py-3 rounded-xl shadow-2xl flex items-center gap-2.5 text-xs sm:text-sm font-bold">
         <i id="toastIcon" class="fa-solid fa-circle-info text-indigo-400"></i>
-        <span id="toastMessage" class="text-xs sm:text-sm font-semibold">メッセージ</span>
+        <span id="toastMessage">通知メッセージ</span>
     </div>
 
-    <!-- 新規追加：QRコード表示＆URL共有モーダル -->
+    <!-- QRコード表示＆URL共有モーダル -->
     <div id="qrModal" class="fixed inset-0 z-50 bg-black/75 hidden items-center justify-center p-4">
         <div class="bg-slate-900 border border-slate-700 rounded-2xl max-w-md w-full p-6 shadow-2xl text-center">
             <div class="flex items-center justify-between pb-3 border-b border-slate-800">
                 <h3 class="text-lg font-black text-white flex items-center gap-2">
                     <i class="fa-solid fa-qrcode text-indigo-400"></i>
-                    講義ルーム参加用 QRコード
+                    講義参加用 QRコード
                 </h3>
                 <button type="button" id="closeQrModalBtn" class="text-slate-400 hover:text-white p-1">
                     <i class="fa-solid fa-xmark text-xl"></i>
@@ -498,7 +406,7 @@
 
             <div class="my-4">
                 <p class="text-xs text-slate-300 mb-3">
-                    スクリーンに投影して学生のスマホで読み取ると、講義コード <strong id="qrRoomLabel" class="text-indigo-400 font-black">LEC-101</strong> に自動で入室できます。
+                    スクリーンに投影してスマホで読み取ると、全員同じページでリアルタイムにリアクション・コメントが共有されます。
                 </p>
 
                 <!-- 白背景のQRコード描画ボックス -->
@@ -508,7 +416,7 @@
 
                 <!-- 共有URLコピー欄 -->
                 <div class="mt-4 text-left">
-                    <label class="text-[11px] font-bold text-slate-400 block mb-1">参加用ダイレクトURL（変更してQR再生成も可能）:</label>
+                    <label class="text-[11px] font-bold text-slate-400 block mb-1">参加用URL（変更してQR再生成も可能）:</label>
                     <div class="flex gap-2">
                         <input id="shareUrlInput" type="text"
                             class="flex-1 bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-200 font-mono focus:outline-none focus:border-indigo-500">
@@ -535,10 +443,10 @@
         <div class="bg-slate-900 border border-slate-700 rounded-2xl max-w-md w-full p-6 shadow-2xl">
             <h3 class="text-lg font-bold text-white flex items-center gap-2 mb-2">
                 <i class="fa-solid fa-triangle-exclamation text-rose-500"></i>
-                現在の講義ルームの記録をリセットしますか？
+                講義の記録をリセットしますか？
             </h3>
             <p class="text-sm text-slate-300 mb-5">
-                講義コード「<span id="confirmRoomName" class="font-bold text-indigo-400"></span>」のリアクションとコメント履歴をクリアします。よろしいですか？
+                現在接続している全員のリアクション推移とコメント履歴をクリアします。よろしいですか？
             </p>
             <div class="flex justify-end gap-3">
                 <button type="button" id="cancelClearBtn" class="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-sm font-semibold">
@@ -551,68 +459,11 @@
         </div>
     </div>
 
-    <!-- GitHub Pages / Netlify 公開＆マルチプレイ設定ガイドモーダル -->
-    <div id="githubModal" class="fixed inset-0 z-50 bg-black/75 hidden items-center justify-center p-4 overflow-y-auto">
-        <div class="bg-slate-900 border border-slate-700 rounded-2xl max-w-2xl w-full p-6 shadow-2xl my-8 max-h-[90vh] overflow-y-auto">
-            <div class="flex items-center justify-between pb-4 border-b border-slate-800">
-                <h3 class="text-lg font-black text-white flex items-center gap-2">
-                    <i class="fa-brands fa-github text-2xl"></i>
-                    GitHub Pages / Netlify での動作＆データベース設定
-                </h3>
-                <button type="button" id="closeGithubModalBtn" class="text-slate-400 hover:text-white p-1">
-                    <i class="fa-solid fa-xmark text-xl"></i>
-                </button>
-            </div>
-
-            <div class="space-y-4 my-4 text-sm text-slate-300 leading-relaxed">
-                <div class="bg-emerald-950/50 border border-emerald-500/30 rounded-xl p-4">
-                    <div class="font-bold text-emerald-300 mb-1 flex items-center gap-1.5">
-                        <i class="fa-solid fa-circle-check"></i> 設定不要でそのまま複数人リアルタイム同期が動きます！
-                    </div>
-                    <p class="text-xs text-slate-300">
-                        このバージョンでは、GitHub Pages や Netlify に <code>index.html</code> をそのままアップロードした際、Firebase の設定がまだ無くても<strong>自動的に公開WebSocketリレー（MQTT over WSS）およびタブ間通信へ接続し、スマホ・PC間でリアルタイムにリアクションとコメントが共有</strong>されます。
-                    </p>
-                </div>
-
-                <div class="space-y-3">
-                    <h4 class="font-bold text-white text-base">オプション: 専用 Firebase Firestore を使う場合</h4>
-                    <p class="text-xs text-slate-400">
-                        永続的に講義データをクラウド保存したい場合は、<a href="https://console.firebase.google.com/" target="_blank" rel="noopener noreferrer" class="text-indigo-400 underline">Firebase Console</a> で作成した <code>firebaseConfig</code> を以下に貼り付けるか、コード内の <code>CUSTOM_FIREBASE_CONFIG</code> に設定してください。
-                    </p>
-                    <div class="bg-slate-800/90 p-3.5 rounded-xl border border-slate-700">
-                        <label class="block text-xs font-bold text-slate-300 mb-1.5">
-                            カスタム Firebase Config JSON:
-                        </label>
-                        <textarea id="customFirebaseInput" rows="3" placeholder='{"apiKey": "AIza...", "authDomain": "...", "projectId": "..."}'
-                            class="w-full bg-slate-950 text-xs font-mono text-emerald-300 p-2.5 rounded-lg border border-slate-700 focus:outline-none focus:border-indigo-500"></textarea>
-                        <div class="flex justify-end mt-2">
-                            <button type="button" id="applyCustomFirebaseBtn" class="text-xs bg-indigo-600 hover:bg-indigo-500 text-white font-bold px-3 py-1.5 rounded-lg transition">
-                                この設定で再接続する
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <div class="flex justify-end pt-3 border-t border-slate-800">
-                <button type="button" id="closeGithubModalBtnBottom" class="px-5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-white text-sm font-bold">
-                    閉じる
-                </button>
-            </div>
-        </div>
-    </div>
-
-    <!-- アプリケーションロジック＆マルチチャネル同期（Firebase + MQTT WebSocket + BroadcastChannel） -->
+    <!-- アプリケーションロジック＆マルチ端末リアルタイム同期 -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, collection, addDoc, onSnapshot, deleteDoc, doc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-
-        // ============================================================================
-        // 【GitHub Pages / Netlify 用】
-        // 未設定(null)のままでも自動的にWebSocket(MQTT)リレーで複数人同時アクセスが動作します。
-        // ============================================================================
-        const CUSTOM_FIREBASE_CONFIG = null;
+        import { getFirestore, collection, addDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         // リアクション定義
         const REACTION_TYPES = {
@@ -630,24 +481,31 @@
             help:     { label: '🆘 ヘルプ',   badgeClass: 'bg-rose-500/20 text-rose-300 border-rose-500/40' }
         };
 
-        // URLパラメータ (?room=XXX) があれば初期講義コードとして採用
-        const urlParams = new URLSearchParams(window.location.search);
-        const initialRoomFromUrl = urlParams.get('room') ? urlParams.get('room').trim().toUpperCase() : "LEC-101";
+        // サイトの設置URL（ホスト名＋パス）から自動的に共通チャンネル名を生成
+        const siteIdentifier = (window.location.hostname + window.location.pathname)
+            .replace(/[^a-zA-Z0-9]/g, '_')
+            .replace(/_+/g, '_')
+            .substring(0, 40) || 'default_lecture';
+        const SYNC_TOPIC = `lecturepulse/v3/sync/${siteIdentifier}`;
 
         // アプリケーション状態
-        let currentRoom = initialRoomFromUrl || "LEC-101";
         let bucketSizeSeconds = 10;
         let chartType = 'line';
         let soundEnabled = true;
-        let simBotInterval = null;
         let myTotalSentCount = 0;
         let commentFilter = 'all';
+        let timelineChart = null;
 
-        // 記録データ配列（回数無制限）
+        // 記録データ配列＆高速集計用カウンター
         let allReactions = [];
         let allComments = [];
+        let totalCounts = { like: 0, insight: 0, bad: 0, question: 0 };
         let seenEventIds = new Set();
         let initialLoadComplete = false;
+
+        // 描画スロットリング（動作が重くなるのを防ぐ）
+        let chartUpdatePending = false;
+        let lastChartUpdateTime = 0;
 
         // コンボ管理
         let comboCounter = 0;
@@ -657,16 +515,14 @@
         // 通信インスタンス
         let db = null;
         let auth = null;
-        let currentUser = { uid: 'user-' + Math.random().toString(36).substring(2, 8) };
-        let unsubscribeReactions = null;
-        let unsubscribeComments = null;
-        let mqttClient = null;
-        let mqttConnected = false;
+        let currentUser = { uid: 'u-' + Math.random().toString(36).substring(2, 8) };
+        let mqttClients = [];
+        let isMqttConnected = false;
         let broadcastChannel = null;
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'lecture-pulse-app';
 
         // ============================================================================
-        // Web Audio API シンセサイザー（連続打鍵でも詰まらない軽量設計）
+        // Web Audio API シンセサイザー（軽量設計）
         // ============================================================================
         const AudioContextClass = window.AudioContext || window.webkitAudioContext;
         let audioCtx = null;
@@ -687,20 +543,20 @@
                 osc.frequency.setValueAtTime(baseFreq, now);
                 
                 if (type === 'like' || type === 'insight') {
-                    osc.frequency.exponentialRampToValueAtTime(baseFreq * (isFever ? 1.5 : 1.25), now + 0.12);
+                    osc.frequency.exponentialRampToValueAtTime(baseFreq * (isFever ? 1.4 : 1.2), now + 0.1);
                 } else if (type === 'bad') {
-                    osc.frequency.exponentialRampToValueAtTime(baseFreq * 0.85, now + 0.15);
+                    osc.frequency.exponentialRampToValueAtTime(baseFreq * 0.85, now + 0.12);
                 } else {
-                    osc.frequency.exponentialRampToValueAtTime(baseFreq * 1.15, now + 0.12);
+                    osc.frequency.exponentialRampToValueAtTime(baseFreq * 1.15, now + 0.1);
                 }
 
-                gain.gain.setValueAtTime(0.1, now);
-                gain.gain.exponentialRampToValueAtTime(0.001, now + 0.15);
+                gain.gain.setValueAtTime(0.08, now);
+                gain.gain.exponentialRampToValueAtTime(0.001, now + 0.12);
 
                 osc.connect(gain);
                 gain.connect(audioCtx.destination);
                 osc.start(now);
-                osc.stop(now + 0.16);
+                osc.stop(now + 0.13);
             } catch (e) {}
         }
 
@@ -712,6 +568,7 @@
             const toast = document.getElementById('toastNotification');
             const msgEl = document.getElementById('toastMessage');
             const iconEl = document.getElementById('toastIcon');
+            if (!toast || !msgEl || !iconEl) return;
 
             msgEl.textContent = message;
             iconEl.className = iconClass;
@@ -723,39 +580,38 @@
             toastTimer = setTimeout(() => {
                 toast.classList.add('translate-y-20', 'opacity-0');
                 toast.classList.remove('translate-y-0', 'opacity-100');
-            }, 3000);
+            }, 2800);
         }
 
         // ============================================================================
-        // フローティング絵文字＆流れるライブコメント演出
+        // フローティング絵文字＆流れるライブコメント演出（軽量化済み）
         // ============================================================================
         function spawnFloatingEmoji(type, isSelf = false) {
             const container = document.getElementById('floatingContainer');
+            if (!container) return;
             const info = REACTION_TYPES[type] || REACTION_TYPES.like;
             
-            // DOMが増えすぎて重くならないよう上限40個で古いものを削除
-            if (container.children.length > 40) {
+            // 画面負荷を抑えるため上限25個までに制限
+            while (container.children.length > 25) {
                 container.removeChild(container.firstChild);
             }
 
             const el = document.createElement('div');
             el.className = 'floating-reaction flex items-center gap-1 font-black';
             
-            const leftPos = 8 + Math.random() * 78;
+            const leftPos = 10 + Math.random() * 75;
             el.style.left = `${leftPos}%`;
-            el.style.fontSize = isSelf ? '2.1rem' : '1.7rem';
+            el.style.fontSize = isSelf ? '2rem' : '1.65rem';
             
-            el.innerHTML = `<span>${info.emoji}</span>${isSelf ? `<span class="text-xs px-1.5 py-0.5 rounded bg-indigo-600/90 text-white shadow">+1</span>` : ''}`;
+            el.innerHTML = `<span>${info.emoji}</span>${isSelf ? `<span class="text-xs px-1.5 py-0.5 rounded bg-indigo-600 text-white">+1</span>` : ''}`;
             container.appendChild(el);
 
             const centerIcon = document.getElementById('stageCenterIcon');
-            centerIcon.textContent = info.emoji;
-            centerIcon.classList.add('scale-125');
-            setTimeout(() => centerIcon.classList.remove('scale-125'), 120);
+            if (centerIcon) centerIcon.textContent = info.emoji;
 
             setTimeout(() => {
                 if (el.parentNode) el.parentNode.removeChild(el);
-            }, 2100);
+            }, 1800);
         }
 
         function spawnFloatingComment(text, tag = 'comment') {
@@ -763,12 +619,12 @@
             if (danmakuToggle && !danmakuToggle.checked) return;
 
             const container = document.getElementById('floatingContainer');
+            if (!container) return;
             const el = document.createElement('div');
             const tagInfo = COMMENT_TAGS[tag] || COMMENT_TAGS.comment;
 
-            // 高さをランダムに配置 (15% 〜 70%)
             const topPos = 15 + Math.floor(Math.random() * 55);
-            el.className = 'floating-comment flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-900/90 border border-slate-600 text-white text-xs sm:text-sm font-bold shadow-lg';
+            el.className = 'floating-comment flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-900/95 border border-slate-600 text-white text-xs sm:text-sm font-bold shadow-md';
             el.style.top = `${topPos}%`;
 
             const badgeSpan = document.createElement('span');
@@ -784,7 +640,7 @@
 
             setTimeout(() => {
                 if (el.parentNode) el.parentNode.removeChild(el);
-            }, 7500);
+            }, 7000);
         }
 
         function updateCombo() {
@@ -798,12 +654,12 @@
 
             const comboContainer = document.getElementById('comboContainer');
             const comboCountEl = document.getElementById('comboCount');
+            if (!comboContainer || !comboCountEl) return;
 
             if (comboCounter >= 2) {
                 comboCountEl.textContent = comboCounter;
-                comboContainer.classList.remove('opacity-0', 'combo-animate');
-                void comboContainer.offsetWidth;
-                comboContainer.classList.add('opacity-100', 'combo-animate');
+                comboContainer.classList.remove('opacity-0');
+                comboContainer.classList.add('opacity-100');
             }
 
             if (comboResetTimer) clearTimeout(comboResetTimer);
@@ -811,106 +667,108 @@
                 comboCounter = 0;
                 comboContainer.classList.remove('opacity-100');
                 comboContainer.classList.add('opacity-0');
-            }, 2600);
+            }, 2500);
         }
 
         // ============================================================================
-        // Chart.js 高解像度（Retina / 高DPI強制）リアルタイム推移グラフ
+        // Chart.js 高解像度＆高速描画グラフ初期化
         // ============================================================================
-        const ctx = document.getElementById('timelineChart').getContext('2d');
-        const highDpiRatio = Math.max(window.devicePixelRatio || 1, 2);
+        function initTimelineChart() {
+            const canvasEl = document.getElementById('timelineChart');
+            if (!canvasEl) return;
+            const ctx = canvasEl.getContext('2d');
+            const highDpiRatio = Math.min(Math.max(window.devicePixelRatio || 1, 1.5), 2);
 
-        const timelineChart = new Chart(ctx, {
-            type: 'line',
-            data: {
-                labels: [],
-                datasets: [
-                    {
-                        label: '👍 いいね！',
-                        data: [],
-                        borderColor: REACTION_TYPES.like.color,
-                        backgroundColor: REACTION_TYPES.like.bg,
-                        borderWidth: 2.5,
-                        tension: 0.3,
-                        fill: true,
-                        pointRadius: 3
-                    },
-                    {
-                        label: '💡 なるほど',
-                        data: [],
-                        borderColor: REACTION_TYPES.insight.color,
-                        backgroundColor: REACTION_TYPES.insight.bg,
-                        borderWidth: 2.5,
-                        tension: 0.3,
-                        fill: true,
-                        pointRadius: 3
-                    },
-                    {
-                        label: '🤔 Bad / 難',
-                        data: [],
-                        borderColor: REACTION_TYPES.bad.color,
-                        backgroundColor: REACTION_TYPES.bad.bg,
-                        borderWidth: 2.5,
-                        tension: 0.3,
-                        fill: true,
-                        pointRadius: 3
-                    },
-                    {
-                        label: '❓ 少し速い/疑問',
-                        data: [],
-                        borderColor: REACTION_TYPES.question.color,
-                        backgroundColor: REACTION_TYPES.question.bg,
-                        borderWidth: 2.5,
-                        tension: 0.3,
-                        fill: true,
-                        pointRadius: 3
-                    }
-                ]
-            },
-            options: {
-                devicePixelRatio: highDpiRatio, // GitHub/Netlify公開時のモバイル・PC画質劣化を防止
-                responsive: true,
-                maintainAspectRatio: false,
-                animation: {
-                    duration: 200
+            timelineChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [
+                        {
+                            label: '👍 いいね！',
+                            data: [],
+                            borderColor: REACTION_TYPES.like.color,
+                            backgroundColor: REACTION_TYPES.like.bg,
+                            borderWidth: 2.5,
+                            tension: 0.3,
+                            fill: true,
+                            pointRadius: 2.5
+                        },
+                        {
+                            label: '💡 なるほど',
+                            data: [],
+                            borderColor: REACTION_TYPES.insight.color,
+                            backgroundColor: REACTION_TYPES.insight.bg,
+                            borderWidth: 2.5,
+                            tension: 0.3,
+                            fill: true,
+                            pointRadius: 2.5
+                        },
+                        {
+                            label: '🤔 Bad / 難',
+                            data: [],
+                            borderColor: REACTION_TYPES.bad.color,
+                            backgroundColor: REACTION_TYPES.bad.bg,
+                            borderWidth: 2.5,
+                            tension: 0.3,
+                            fill: true,
+                            pointRadius: 2.5
+                        },
+                        {
+                            label: '❓ 少し速い/疑問',
+                            data: [],
+                            borderColor: REACTION_TYPES.question.color,
+                            backgroundColor: REACTION_TYPES.question.bg,
+                            borderWidth: 2.5,
+                            tension: 0.3,
+                            fill: true,
+                            pointRadius: 2.5
+                        }
+                    ]
                 },
-                interaction: {
-                    mode: 'index',
-                    intersect: false
-                },
-                plugins: {
-                    legend: {
-                        position: 'top',
-                        labels: {
-                            color: '#e2e8f0',
-                            font: { family: "'Inter', 'Noto Sans JP', sans-serif", size: 12, weight: 'bold' },
-                            usePointStyle: true,
-                            padding: 14
+                options: {
+                    devicePixelRatio: highDpiRatio,
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    animation: false,
+                    interaction: {
+                        mode: 'index',
+                        intersect: false
+                    },
+                    plugins: {
+                        legend: {
+                            position: 'top',
+                            labels: {
+                                color: '#e2e8f0',
+                                font: { family: "'Inter', 'Noto Sans JP', sans-serif", size: 12, weight: 'bold' },
+                                usePointStyle: true,
+                                padding: 14
+                            }
+                        },
+                        tooltip: {
+                            backgroundColor: 'rgba(15, 23, 42, 0.95)',
+                            titleColor: '#f8fafc',
+                            bodyColor: '#e2e8f0',
+                            borderColor: '#475569',
+                            borderWidth: 1,
+                            padding: 10
                         }
                     },
-                    tooltip: {
-                        backgroundColor: 'rgba(15, 23, 42, 0.95)',
-                        titleColor: '#f8fafc',
-                        bodyColor: '#e2e8f0',
-                        borderColor: '#475569',
-                        borderWidth: 1,
-                        padding: 10
-                    }
-                },
-                scales: {
-                    x: {
-                        grid: { color: 'rgba(51, 65, 85, 0.35)' },
-                        ticks: { color: '#cbd5e1', font: { size: 11 }, maxRotation: 0, autoSkip: true, maxTicksLimit: 8 }
-                    },
-                    y: {
-                        beginAtZero: true,
-                        grace: '15%', // 5回を超えて何十回・何百回送られても自動でスケール拡張
-                        grid: { color: 'rgba(51, 65, 85, 0.4)' },
-                        ticks: { color: '#cbd5e1', precision: 0 }
+                    scales: {
+                        x: {
+                            grid: { color: 'rgba(51, 65, 85, 0.35)' },
+                            ticks: { color: '#cbd5e1', font: { size: 11 }, maxRotation: 0, autoSkip: true, maxTicksLimit: 8 }
+                        },
+                        y: {
+                            beginAtZero: true,
+                            grace: '15%',
+                            grid: { color: 'rgba(51, 65, 85, 0.4)' },
+                            ticks: { color: '#cbd5e1', precision: 0 }
+                        }
                     }
                 }
-            }
-        });
+            });
+        }
 
         function formatTimeLabel(timestampMs, bucketSec) {
             const d = new Date(timestampMs);
@@ -920,118 +778,156 @@
             return bucketSec < 60 ? `${hh}:${mm}:${ss}` : `${hh}:${mm}`;
         }
 
+        // カウンター数値の即時更新（超軽量）
+        function updateCountersFast() {
+            const likeEl = document.getElementById('count-like');
+            const insightEl = document.getElementById('count-insight');
+            const badEl = document.getElementById('count-bad');
+            const questionEl = document.getElementById('count-question');
+            if (likeEl) likeEl.textContent = totalCounts.like;
+            if (insightEl) insightEl.textContent = totalCounts.insight;
+            if (badEl) badEl.textContent = totalCounts.bad;
+            if (questionEl) questionEl.textContent = totalCounts.question;
+
+            const totalCount = allReactions.length;
+            const totalEl = document.getElementById('totalReactionsCount');
+            if (totalEl) totalEl.textContent = totalCount;
+
+            const positiveCount = totalCounts.like + totalCounts.insight;
+            const ratioEl = document.getElementById('positiveRatioText');
+            if (ratioEl) {
+                if (totalCount > 0) {
+                    const pct = Math.round((positiveCount / totalCount) * 100);
+                    ratioEl.textContent = `${pct}% (${positiveCount}/${totalCount})`;
+                } else {
+                    ratioEl.textContent = '-- %';
+                }
+            }
+        }
+
+        // グラフ更新のスロットリング（連打時でも最大200msに1回だけグラフ計算を実行）
+        function scheduleChartUpdate() {
+            updateCountersFast();
+            const now = Date.now();
+            if (now - lastChartUpdateTime >= 200) {
+                updateDashboardAndChart();
+            } else if (!chartUpdatePending) {
+                chartUpdatePending = true;
+                setTimeout(() => {
+                    chartUpdatePending = false;
+                    updateDashboardAndChart();
+                }, 200);
+            }
+        }
+
         // ============================================================================
         // 単位時間ごとの集計とグラフ・UI更新
         // ============================================================================
         function updateDashboardAndChart() {
-            const now = Date.now();
-            const roomReactions = allReactions.filter(r => r.room === currentRoom);
+            lastChartUpdateTime = Date.now();
+            const now = lastChartUpdateTime;
+            updateCountersFast();
 
-            const totals = { like: 0, insight: 0, bad: 0, question: 0 };
-            roomReactions.forEach(r => {
-                if (totals[r.type] !== undefined) totals[r.type]++;
-            });
+            const totalCount = allReactions.length;
 
-            document.getElementById('count-like').textContent = totals.like;
-            document.getElementById('count-insight').textContent = totals.insight;
-            document.getElementById('count-bad').textContent = totals.bad;
-            document.getElementById('count-question').textContent = totals.question;
-            document.getElementById('totalReactionsCount').textContent = roomReactions.length;
-
-            const totalCount = roomReactions.length;
-            const positiveCount = totals.like + totals.insight;
-            const ratioEl = document.getElementById('positiveRatioText');
-            if (totalCount > 0) {
-                const pct = Math.round((positiveCount / totalCount) * 100);
-                ratioEl.textContent = `${pct}% (${positiveCount}/${totalCount})`;
-            } else {
-                ratioEl.textContent = '-- %';
+            // 直近10秒間のリアクション密度を計算
+            let recent10sCount = 0;
+            for (let i = allReactions.length - 1; i >= 0; i--) {
+                if (now - allReactions[i].timestamp <= 10000) {
+                    recent10sCount++;
+                } else if (now - allReactions[i].timestamp > 15000) {
+                    break;
+                }
             }
 
-            const recent10sCount = roomReactions.filter(r => now - r.timestamp <= 10000).length;
-            document.getElementById('rpmDisplay').textContent = `${recent10sCount} react / 10秒`;
+            const rpmEl = document.getElementById('rpmDisplay');
+            if (rpmEl) rpmEl.textContent = `${recent10sCount} react / 10秒`;
             
             const voltagePct = Math.min(100, Math.round((recent10sCount / 15) * 100));
-            document.getElementById('voltageBar').style.width = `${voltagePct}%`;
+            const voltageBar = document.getElementById('voltageBar');
+            if (voltageBar) voltageBar.style.width = `${voltagePct}%`;
 
             const liveStage = document.getElementById('liveStage');
             const feverBadge = document.getElementById('feverBadge');
             const stageTitle = document.getElementById('stageStatusTitle');
 
-            if (voltagePct >= 80) {
-                liveStage.classList.add('fever-mode');
-                feverBadge.innerHTML = '<i class="fa-solid fa-fire text-amber-300 mr-1 animate-bounce"></i>🔥 FEVER! 講義が白熱中！';
-                stageTitle.textContent = "🔥 講義が最高に盛り上がっています！！";
-            } else {
-                liveStage.classList.remove('fever-mode');
-                feverBadge.innerHTML = '<i class="fa-solid fa-fire-flame-curved mr-1"></i>講義の盛り上がり度';
-                if (totalCount === 0) {
-                    stageTitle.textContent = "ボタンを押して講義にリアクション！";
+            if (liveStage && feverBadge && stageTitle) {
+                if (voltagePct >= 80) {
+                    liveStage.classList.add('fever-mode');
+                    feverBadge.innerHTML = '<i class="fa-solid fa-fire text-amber-300 mr-1"></i>🔥 FEVER! 講義が白熱中！';
+                    stageTitle.textContent = "🔥 講義が最高に盛り上がっています！！";
                 } else {
-                    stageTitle.textContent = `講義ルーム [${currentRoom}] でリアルタイム集計中（計 ${totalCount} 回）`;
+                    liveStage.classList.remove('fever-mode');
+                    feverBadge.innerHTML = '<i class="fa-solid fa-fire-flame-curved mr-1"></i>講義の盛り上がり度';
+                    if (totalCount === 0) {
+                        stageTitle.textContent = "ボタンを押して講義にリアクション！";
+                    } else {
+                        stageTitle.textContent = `リアルタイム集計中（全体の累計 ${totalCount} 回）`;
+                    }
                 }
             }
 
             const bucketMs = bucketSizeSeconds * 1000;
             const numBuckets = bucketSizeSeconds === 60 ? 20 : 18;
             const currentBucketEnd = Math.floor(now / bucketMs) * bucketMs;
+            const windowStartTime = currentBucketEnd - ((numBuckets - 1) * bucketMs);
 
-            const labels = [];
-            const seriesLike = [];
-            const seriesInsight = [];
-            const seriesBad = [];
-            const seriesQuestion = [];
+            const labels = new Array(numBuckets);
+            const seriesLike = new Array(numBuckets).fill(0);
+            const seriesInsight = new Array(numBuckets).fill(0);
+            const seriesBad = new Array(numBuckets).fill(0);
+            const seriesQuestion = new Array(numBuckets).fill(0);
+
+            for (let idx = 0; idx < numBuckets; idx++) {
+                const startTime = windowStartTime + (idx * bucketMs);
+                labels[idx] = formatTimeLabel(startTime, bucketSizeSeconds);
+            }
+
+            // O(N) の1パスでバケット振り分け
+            for (let j = 0; j < allReactions.length; j++) {
+                const r = allReactions[j];
+                if (r.timestamp >= windowStartTime) {
+                    const bucketIdx = Math.floor((r.timestamp - windowStartTime) / bucketMs);
+                    if (bucketIdx >= 0 && bucketIdx < numBuckets) {
+                        if (r.type === 'like') seriesLike[bucketIdx]++;
+                        else if (r.type === 'insight') seriesInsight[bucketIdx]++;
+                        else if (r.type === 'bad') seriesBad[bucketIdx]++;
+                        else if (r.type === 'question') seriesQuestion[bucketIdx]++;
+                    }
+                }
+            }
 
             let maxPositiveVal = 0;
             let maxPositiveLabel = "記録なし";
             let maxNegativeVal = 0;
             let maxNegativeLabel = "記録なし";
 
-            for (let i = numBuckets - 1; i >= 0; i--) {
-                const startTime = currentBucketEnd - (i * bucketMs);
-                const endTime = startTime + bucketMs;
-                const labelStr = formatTimeLabel(startTime, bucketSizeSeconds);
-                labels.push(labelStr);
-
-                let cLike = 0, cInsight = 0, cBad = 0, cQuestion = 0;
-
-                for (let j = 0; j < roomReactions.length; j++) {
-                    const t = roomReactions[j].timestamp;
-                    if (t >= startTime && t < endTime) {
-                        const rType = roomReactions[j].type;
-                        if (rType === 'like') cLike++;
-                        else if (rType === 'insight') cInsight++;
-                        else if (rType === 'bad') cBad++;
-                        else if (rType === 'question') cQuestion++;
-                    }
-                }
-
-                seriesLike.push(cLike);
-                seriesInsight.push(cInsight);
-                seriesBad.push(cBad);
-                seriesQuestion.push(cQuestion);
-
-                const posSum = cLike + cInsight;
-                const negSum = cBad + cQuestion;
+            for (let idx = 0; idx < numBuckets; idx++) {
+                const posSum = seriesLike[idx] + seriesInsight[idx];
+                const negSum = seriesBad[idx] + seriesQuestion[idx];
                 if (posSum > maxPositiveVal) {
                     maxPositiveVal = posSum;
-                    maxPositiveLabel = `${labelStr} (${posSum}件)`;
+                    maxPositiveLabel = `${labels[idx]} (${posSum}件)`;
                 }
                 if (negSum > maxNegativeVal) {
                     maxNegativeVal = negSum;
-                    maxNegativeLabel = `${labelStr} (${negSum}件)`;
+                    maxNegativeLabel = `${labels[idx]} (${negSum}件)`;
                 }
             }
 
-            document.getElementById('positivePeakTime').textContent = maxPositiveLabel;
-            document.getElementById('negativePeakTime').textContent = maxNegativeLabel;
+            const posPeakEl = document.getElementById('positivePeakTime');
+            const negPeakEl = document.getElementById('negativePeakTime');
+            if (posPeakEl) posPeakEl.textContent = maxPositiveLabel;
+            if (negPeakEl) negPeakEl.textContent = maxNegativeLabel;
 
-            timelineChart.data.labels = labels;
-            timelineChart.data.datasets[0].data = seriesLike;
-            timelineChart.data.datasets[1].data = seriesInsight;
-            timelineChart.data.datasets[2].data = seriesBad;
-            timelineChart.data.datasets[3].data = seriesQuestion;
-            timelineChart.update('none');
+            if (timelineChart) {
+                timelineChart.data.labels = labels;
+                timelineChart.data.datasets[0].data = seriesLike;
+                timelineChart.data.datasets[1].data = seriesInsight;
+                timelineChart.data.datasets[2].data = seriesBad;
+                timelineChart.data.datasets[3].data = seriesQuestion;
+                timelineChart.update('none');
+            }
         }
 
         // ============================================================================
@@ -1040,16 +936,14 @@
         function renderCommentList() {
             const container = document.getElementById('commentListContainer');
             const badge = document.getElementById('commentCountBadge');
+            if (!container || !badge) return;
 
-            const roomComments = allComments
-                .filter(c => c.room === currentRoom)
-                .sort((a, b) => b.timestamp - a.timestamp);
-
-            badge.textContent = `${roomComments.length}件`;
+            const sortedComments = [...allComments].sort((a, b) => b.timestamp - a.timestamp);
+            badge.textContent = `${sortedComments.length}件`;
 
             const filtered = commentFilter === 'all'
-                ? roomComments
-                : roomComments.filter(c => c.tag === commentFilter);
+                ? sortedComments
+                : sortedComments.filter(c => c.tag === commentFilter);
 
             if (filtered.length === 0) {
                 container.innerHTML = `
@@ -1061,7 +955,7 @@
             }
 
             container.innerHTML = '';
-            filtered.slice(0, 60).forEach(item => {
+            filtered.slice(0, 50).forEach(item => {
                 const tagInfo = COMMENT_TAGS[item.tag] || COMMENT_TAGS.comment;
                 const timeStr = formatTimeLabel(item.timestamp, 10);
 
@@ -1092,7 +986,7 @@
                 leftDiv.appendChild(metaDiv);
                 leftDiv.appendChild(textP);
 
-                // コメントへの「👍共感」ボタン（押すと「いいね」リアクションとしても連動）
+                // コメントへの「👍共感」ボタン
                 const likeBtn = document.createElement('button');
                 likeBtn.type = 'button';
                 likeBtn.className = 'text-xs bg-slate-900 hover:bg-indigo-950 text-slate-300 hover:text-indigo-300 border border-slate-700 px-2.5 py-1 rounded-lg transition flex items-center gap-1 shrink-0';
@@ -1100,7 +994,7 @@
                 likeBtn.addEventListener('click', () => {
                     item.likes = (item.likes || 0) + 1;
                     renderCommentList();
-                    triggerReaction('like', false);
+                    triggerReaction('like');
                 });
 
                 row.appendChild(leftDiv);
@@ -1110,95 +1004,107 @@
         }
 
         // ============================================================================
-        // リアクション＆コメント送信処理（ノンブロッキング・無制限送信保証）
+        // リアクション＆コメント送信処理
         // ============================================================================
-        function triggerReaction(type, isSimulatedBot = false) {
+        function addReactionRecord(reactionObj) {
+            if (!reactionObj || !reactionObj.eventId || seenEventIds.has(reactionObj.eventId)) return false;
+            seenEventIds.add(reactionObj.eventId);
+            allReactions.push(reactionObj);
+            if (totalCounts[reactionObj.type] !== undefined) {
+                totalCounts[reactionObj.type]++;
+            }
+            return true;
+        }
+
+        function addCommentRecord(commentObj) {
+            if (!commentObj || !commentObj.eventId || seenEventIds.has(commentObj.eventId)) return false;
+            seenEventIds.add(commentObj.eventId);
+            allComments.push(commentObj);
+            return true;
+        }
+
+        function triggerReaction(type) {
             if (!REACTION_TYPES[type]) return;
 
             const now = Date.now();
             const eventId = 'ev-' + now + '-' + Math.random().toString(36).substring(2, 8);
-            const isFever = document.getElementById('liveStage').classList.contains('fever-mode');
+            const liveStage = document.getElementById('liveStage');
+            const isFever = liveStage ? liveStage.classList.contains('fever-mode') : false;
 
-            // 1. まずローカル状態に即座に追加（通信結果に関わらず5回制限などで止まらない）
-            seenEventIds.add(eventId);
             const reactionObj = {
                 eventId: eventId,
                 kind: 'reaction',
-                room: currentRoom,
                 type: type,
                 timestamp: now,
-                userId: isSimulatedBot ? 'sim-student-bot' : currentUser.uid
+                userId: currentUser.uid
             };
-            allReactions.push(reactionObj);
 
-            if (!isSimulatedBot) {
-                myTotalSentCount++;
-                document.getElementById('mySentCountBadge').textContent = `自分の送信数: ${myTotalSentCount}回`;
-                updateCombo();
-            }
+            addReactionRecord(reactionObj);
 
-            // 2. 画面エフェクト・効果音・グラフを即時更新
-            spawnFloatingEmoji(type, !isSimulatedBot);
+            myTotalSentCount++;
+            const myBadge = document.getElementById('mySentCountBadge');
+            if (myBadge) myBadge.textContent = `自分の送信数: ${myTotalSentCount}回`;
+            updateCombo();
+
+            spawnFloatingEmoji(type, true);
             playReactionSound(type, isFever);
-            updateDashboardAndChart();
+            scheduleChartUpdate();
 
-            // 3. バックグラウンドで他の参加者へリアルタイム配信（Firebase / MQTT / BroadcastChannel）
             broadcastRealtimeEvent(reactionObj);
         }
 
-        function submitComment(text, tag = 'comment', isSimulatedBot = false) {
+        function submitComment(text, tag = 'comment') {
             const cleanText = text.trim();
             if (!cleanText) return;
 
             const now = Date.now();
             const eventId = 'cm-' + now + '-' + Math.random().toString(36).substring(2, 8);
-            seenEventIds.add(eventId);
 
             const commentObj = {
                 eventId: eventId,
                 kind: 'comment',
-                room: currentRoom,
                 text: cleanText,
                 tag: tag,
                 likes: 0,
                 timestamp: now,
-                userId: isSimulatedBot ? 'sim-student-bot' : currentUser.uid
+                userId: currentUser.uid
             };
 
-            allComments.push(commentObj);
+            addCommentRecord(commentObj);
             spawnFloatingComment(cleanText, tag);
             renderCommentList();
 
-            // 質問タグの場合はグラフの「❓少し速い/疑問」または「💡気づき」にも連動反映
             if (tag === 'question' || tag === 'help') {
-                triggerReaction('question', isSimulatedBot);
+                triggerReaction('question');
             } else if (tag === 'insight') {
-                triggerReaction('insight', isSimulatedBot);
+                triggerReaction('insight');
             }
 
             broadcastRealtimeEvent(commentObj);
         }
 
         // ============================================================================
-        // マルチチャネル配信（Firebase + P2P MQTT WebSocket + BroadcastChannel）
+        // マルチ端末リアルタイム配信＆途中参加端末への履歴同期（MQTT.js + BroadcastChannel + Firebase）
         // ============================================================================
         function broadcastRealtimeEvent(payload) {
-            // A. 同一ブラウザの別タブへ即時同期
+            const msgStr = JSON.stringify(payload);
+
+            // 1. 同一ブラウザの別タブへ同期
             if (broadcastChannel) {
                 try { broadcastChannel.postMessage(payload); } catch (e) {}
             }
 
-            // B. P2P MQTT WebSocket（GitHub Pages / Netlify で設定なしでも別端末と同期）
-            if (mqttClient && mqttConnected) {
-                try {
-                    const message = new Paho.MQTT.Message(JSON.stringify(payload));
-                    message.destinationName = `lecturepulse/v2/${payload.room}`;
-                    mqttClient.send(message);
-                } catch (e) {}
-            }
+            // 2. WebSocket MQTT ブローカー群へ配信
+            mqttClients.forEach(client => {
+                if (client && client.connected) {
+                    try {
+                        client.publish(SYNC_TOPIC, msgStr, { qos: 0 });
+                    } catch (e) {}
+                }
+            });
 
-            // C. Firebase Firestore が有効な場合はクラウド保存
-            if (db && currentUser && currentUser.uid) {
+            // 3. Firebase Firestore が有効な環境ではクラウド保存も併用
+            if (db && currentUser && currentUser.uid && (payload.kind === 'reaction' || payload.kind === 'comment')) {
                 const colName = payload.kind === 'comment' ? 'lecture_comments' : 'lecture_reactions';
                 const colRef = collection(db, 'artifacts', appId, 'public', 'data', colName);
                 addDoc(colRef, payload).catch(() => {});
@@ -1206,44 +1112,86 @@
         }
 
         function handleIncomingRemoteEvent(data) {
-            if (!data || !data.eventId || seenEventIds.has(data.eventId)) return;
-            seenEventIds.add(data.eventId);
+            if (!data || !data.kind) return;
 
+            // リセット命令を受信した場合
+            if (data.kind === 'clear_all') {
+                allReactions = [];
+                allComments = [];
+                totalCounts = { like: 0, insight: 0, bad: 0, question: 0 };
+                seenEventIds.clear();
+                updateDashboardAndChart();
+                renderCommentList();
+                return;
+            }
+
+            // 新規参加した端末からの「履歴同期リクエスト」を受信した場合
+            if (data.kind === 'sync_request' && data.senderId !== currentUser.uid) {
+                if (allReactions.length > 0 || allComments.length > 0) {
+                    const snapshotPayload = {
+                        kind: 'sync_snapshot',
+                        senderId: currentUser.uid,
+                        reactions: allReactions.slice(-300),
+                        comments: allComments.slice(-50)
+                    };
+                    setTimeout(() => broadcastRealtimeEvent(snapshotPayload), Math.random() * 400);
+                }
+                return;
+            }
+
+            // 他の端末から履歴スナップショットを受信した場合
+            if (data.kind === 'sync_snapshot' && data.senderId !== currentUser.uid) {
+                let addedAny = false;
+                if (Array.isArray(data.reactions)) {
+                    data.reactions.forEach(r => {
+                        if (addReactionRecord(r)) addedAny = true;
+                    });
+                }
+                let addedComment = false;
+                if (Array.isArray(data.comments)) {
+                    data.comments.forEach(c => {
+                        if (addCommentRecord(c)) addedComment = true;
+                    });
+                }
+                if (addedAny) {
+                    allReactions.sort((a, b) => a.timestamp - b.timestamp);
+                    scheduleChartUpdate();
+                }
+                if (addedComment) {
+                    renderCommentList();
+                }
+                return;
+            }
+
+            // 通常のコメント受信
             if (data.kind === 'comment') {
-                allComments.push(data);
-                if (data.room === currentRoom) {
+                if (addCommentRecord(data)) {
                     spawnFloatingComment(data.text, data.tag);
                     renderCommentList();
                 }
-            } else {
-                allReactions.push(data);
-                if (data.room === currentRoom) {
+                return;
+            }
+
+            // 通常のリアクション受信
+            if (data.kind === 'reaction') {
+                if (addReactionRecord(data)) {
                     spawnFloatingEmoji(data.type, false);
                     playReactionSound(data.type, false);
-                    updateDashboardAndChart();
+                    scheduleChartUpdate();
                 }
             }
         }
 
         // ============================================================================
-        // QRコード生成機能（Canvas/Img描画＋カスタムURL対応）
+        // QRコード生成機能
         // ============================================================================
         function renderRoomQrCode(customUrl = null) {
             const container = document.getElementById('qrCodeContainer');
             const shareUrlInput = document.getElementById('shareUrlInput');
-            const qrRoomLabel = document.getElementById('qrRoomLabel');
+            if (!container || !shareUrlInput) return;
 
-            qrRoomLabel.textContent = currentRoom;
-
-            let targetUrl = customUrl;
-            if (!targetUrl) {
-                try {
-                    const u = new URL(window.location.href);
-                    u.searchParams.set('room', currentRoom);
-                    targetUrl = u.toString();
-                } catch (e) {
-                    targetUrl = window.location.origin + window.location.pathname + `?room=${encodeURIComponent(currentRoom)}`;
-                }
+            const targetUrl = customUrl || window.location.href;
+            if (!customUrl) {
                 shareUrlInput.value = targetUrl;
             }
 
@@ -1257,87 +1205,97 @@
                     colorLight: "#ffffff",
                     correctLevel: QRCode.CorrectLevel.M
                 });
-            } else {
-                container.innerHTML = '<p class="text-xs text-slate-600">QRライブラリ読込中...</p>';
             }
         }
 
         // ============================================================================
-        // 通信レイヤー初期化（Firebase & WebSocket MQTT リレー）
+        // マルチブローカーWebSocket (MQTT over WSS) ＆ Firebase 初期化
         // ============================================================================
-        function initBroadcastAndMqtt() {
-            // 1. BroadcastChannel（同一PCの複数ウィンドウ・プレゼン画面共有用）
+        function initMultiDeviceSync() {
+            // 1. 同一ブラウザ内のタブ間同期
             if ('BroadcastChannel' in window) {
-                broadcastChannel = new BroadcastChannel('lecture_pulse_channel');
+                broadcastChannel = new BroadcastChannel('lecture_pulse_v3_' + siteIdentifier);
                 broadcastChannel.onmessage = (ev) => {
                     if (ev.data) handleIncomingRemoteEvent(ev.data);
                 };
             }
 
-            // 2. WebSocket MQTT リレー（GitHub Pages / Netlify で複数スマホから同時接続用）
-            if (typeof Paho !== 'undefined') {
-                try {
-                    const clientId = "lp_" + Math.random().toString(16).substring(2, 10);
-                    mqttClient = new Paho.MQTT.Client("broker.emqx.io", 8084, "/mqtt", clientId);
+            // 2. 冗長化した複数のパブリック WebSocket MQTT ブローカーへ接続
+            if (typeof mqtt !== 'undefined') {
+                const brokerUrls = [
+                    'wss://broker.emqx.io:8084/mqtt',
+                    'wss://test.mosquitto.org:8081/mqtt'
+                ];
 
-                    mqttClient.onConnectionLost = () => {
-                        mqttConnected = false;
-                    };
-                    mqttClient.onMessageArrived = (message) => {
-                        try {
-                            const data = JSON.parse(message.payloadString);
-                            handleIncomingRemoteEvent(data);
-                        } catch (e) {}
-                    };
+                brokerUrls.forEach((url) => {
+                    try {
+                        const client = mqtt.connect(url, {
+                            clientId: 'lp3_' + Math.random().toString(16).substring(2, 10),
+                            clean: true,
+                            connectTimeout: 5000,
+                            reconnectPeriod: 3000
+                        });
 
-                    mqttClient.connect({
-                        useSSL: true,
-                        timeout: 5,
-                        onSuccess: () => {
-                            mqttConnected = true;
-                            mqttClient.subscribe(`lecturepulse/v2/${currentRoom}`);
+                        client.on('connect', () => {
+                            isMqttConnected = true;
                             updateSyncBadgeStatus();
-                        },
-                        onFailure: () => {
-                            mqttConnected = false;
+                            client.subscribe(SYNC_TOPIC, { qos: 0 }, (err) => {
+                                if (!err) {
+                                    broadcastRealtimeEvent({
+                                        kind: 'sync_request',
+                                        senderId: currentUser.uid,
+                                        timestamp: Date.now()
+                                    });
+                                }
+                            });
+                        });
+
+                        client.on('message', (topic, message) => {
+                            if (topic === SYNC_TOPIC) {
+                                try {
+                                    const data = JSON.parse(message.toString());
+                                    handleIncomingRemoteEvent(data);
+                                } catch (e) {}
+                            }
+                        });
+
+                        client.on('close', () => {
+                            isMqttConnected = mqttClients.some(c => c && c.connected);
                             updateSyncBadgeStatus();
-                        }
-                    });
-                } catch (e) {}
+                        });
+
+                        mqttClients.push(client);
+                    } catch (e) {}
+                });
             }
         }
 
         function updateSyncBadgeStatus() {
             const badge = document.getElementById('syncStatusBadge');
-            if (db || mqttConnected) {
-                badge.className = "text-[11px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 flex items-center gap-1";
-                badge.innerHTML = '<span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span> LIVE同期中';
+            if (!badge) return;
+            if (isMqttConnected || db) {
+                badge.className = "text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 flex items-center gap-1.5";
+                badge.innerHTML = '<span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span> 全端末リアルタイム集計中';
             } else {
-                badge.className = "text-[11px] font-bold px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 flex items-center gap-1";
-                badge.innerHTML = '<span class="w-2 h-2 rounded-full bg-indigo-400"></span> リアルタイム動作中';
+                badge.className = "text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30 flex items-center gap-1.5";
+                badge.innerHTML = '<span class="w-2 h-2 rounded-full bg-amber-400 animate-pulse"></span> 同期サーバー接続中...';
             }
         }
 
-        async function initRealtimeSync(overrideConfig = null) {
+        async function initFirebaseIfAvailable() {
             const userIdDisplay = document.getElementById('userIdDisplay');
-            userIdDisplay.textContent = `ID: ${currentUser.uid}`;
+            if (userIdDisplay) userIdDisplay.textContent = `ID: ${currentUser.uid}`;
 
             try {
-                let firebaseConfig = overrideConfig || CUSTOM_FIREBASE_CONFIG;
-                if (!firebaseConfig && typeof __firebase_config !== 'undefined' && __firebase_config) {
-                    firebaseConfig = JSON.parse(__firebase_config);
-                }
-
-                if (!firebaseConfig) {
-                    updateSyncBadgeStatus();
+                if (typeof __firebase_config === 'undefined' || !__firebase_config) {
                     return;
                 }
-
-                const app = initializeApp(firebaseConfig, 'lecture-pulse-' + Date.now());
+                const firebaseConfig = JSON.parse(__firebase_config);
+                const app = initializeApp(firebaseConfig);
                 auth = getAuth(app);
                 db = getFirestore(app);
 
-                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token && !overrideConfig) {
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
                     await signInWithCustomToken(auth, __initial_auth_token);
                 } else {
                     await signInAnonymously(auth);
@@ -1346,70 +1304,71 @@
                 onAuthStateChanged(auth, (user) => {
                     if (user) {
                         currentUser = user;
-                        userIdDisplay.textContent = `ID: ${user.uid}`;
+                        if (userIdDisplay) userIdDisplay.textContent = `ID: ${user.uid}`;
                         startFirestoreListeners();
                         updateSyncBadgeStatus();
                     }
                 });
             } catch (err) {
                 db = null;
-                updateSyncBadgeStatus();
             }
         }
 
         function startFirestoreListeners() {
             if (!db || !currentUser) return;
-            if (unsubscribeReactions) unsubscribeReactions();
-            if (unsubscribeComments) unsubscribeComments();
 
             const reactionsRef = collection(db, 'artifacts', appId, 'public', 'data', 'lecture_reactions');
-            unsubscribeReactions = onSnapshot(reactionsRef, (snapshot) => {
+            onSnapshot(reactionsRef, (snapshot) => {
+                let changed = false;
                 snapshot.forEach((docSnap) => {
                     const data = docSnap.data();
                     const evId = data.eventId || docSnap.id;
-                    if (data && data.type && data.timestamp && !seenEventIds.has(evId)) {
-                        seenEventIds.add(evId);
-                        allReactions.push({
-                            id: docSnap.id,
+                    if (data && data.type && data.timestamp) {
+                        const added = addReactionRecord({
                             eventId: evId,
-                            room: data.room || 'LEC-101',
+                            kind: 'reaction',
                             type: data.type,
                             timestamp: data.timestamp,
                             userId: data.userId || 'anon'
                         });
-                        if (initialLoadComplete && data.room === currentRoom && data.userId !== currentUser.uid) {
-                            spawnFloatingEmoji(data.type, false);
-                            playReactionSound(data.type, false);
+                        if (added) {
+                            changed = true;
+                            if (initialLoadComplete && data.userId !== currentUser.uid) {
+                                spawnFloatingEmoji(data.type, false);
+                                playReactionSound(data.type, false);
+                            }
                         }
                     }
                 });
                 initialLoadComplete = true;
-                updateDashboardAndChart();
+                if (changed) scheduleChartUpdate();
             }, () => {});
 
             const commentsRef = collection(db, 'artifacts', appId, 'public', 'data', 'lecture_comments');
-            unsubscribeComments = onSnapshot(commentsRef, (snapshot) => {
+            onSnapshot(commentsRef, (snapshot) => {
+                let changed = false;
                 snapshot.forEach((docSnap) => {
                     const data = docSnap.data();
                     const evId = data.eventId || docSnap.id;
-                    if (data && data.text && data.timestamp && !seenEventIds.has(evId)) {
-                        seenEventIds.add(evId);
-                        allComments.push({
-                            id: docSnap.id,
+                    if (data && data.text && data.timestamp) {
+                        const added = addCommentRecord({
                             eventId: evId,
-                            room: data.room || 'LEC-101',
+                            kind: 'comment',
                             text: data.text,
                             tag: data.tag || 'comment',
                             likes: data.likes || 0,
                             timestamp: data.timestamp,
                             userId: data.userId || 'anon'
                         });
-                        if (initialLoadComplete && data.room === currentRoom && data.userId !== currentUser.uid) {
-                            spawnFloatingComment(data.text, data.tag);
+                        if (added) {
+                            changed = true;
+                            if (initialLoadComplete && data.userId !== currentUser.uid) {
+                                spawnFloatingComment(data.text, data.tag);
+                            }
                         }
                     }
                 });
-                renderCommentList();
+                if (changed) renderCommentList();
             }, () => {});
         }
 
@@ -1417,35 +1376,43 @@
         // イベントリスナー登録
         // ============================================================================
         window.addEventListener('DOMContentLoaded', () => {
-            const roomInput = document.getElementById('roomInput');
-            roomInput.value = currentRoom;
-
-            initBroadcastAndMqtt();
-            initRealtimeSync();
+            initTimelineChart();
+            initMultiDeviceSync();
+            initFirebaseIfAvailable();
             updateDashboardAndChart();
             renderCommentList();
 
-            // 1秒ごとに時系列グラフの時間軸を更新
+            // グラフの時間軸シフト更新（負荷軽減のため2秒間隔）
             setInterval(() => {
                 updateDashboardAndChart();
-            }, 1000);
+            }, 2000);
 
-            // リアクションボタンクリック（連打・無制限対応）
+            // リアクションボタンクリック
             document.querySelectorAll('.reaction-btn').forEach(btn => {
                 btn.addEventListener('click', (e) => {
                     e.preventDefault();
                     const type = btn.getAttribute('data-type');
-                    triggerReaction(type, false);
+                    triggerReaction(type);
                 });
             });
 
             // キーボードショートカット (1, 2, 3, 4)
             window.addEventListener('keydown', (e) => {
                 if (['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName)) return;
-                if (e.key === '1') triggerReaction('like', false);
-                else if (e.key === '2') triggerReaction('insight', false);
-                else if (e.key === '3') triggerReaction('bad', false);
-                else if (e.key === '4') triggerReaction('question', false);
+                if (e.key === '1') triggerReaction('like');
+                else if (e.key === '2') triggerReaction('insight');
+                else if (e.key === '3') triggerReaction('bad');
+                else if (e.key === '4') triggerReaction('question');
+            });
+
+            // 手動データ同期ボタン
+            document.getElementById('syncRequestBtn').addEventListener('click', () => {
+                broadcastRealtimeEvent({
+                    kind: 'sync_request',
+                    senderId: currentUser.uid,
+                    timestamp: Date.now()
+                });
+                showToast("周囲の端末へ最新データの同期をリクエストしました", "fa-solid fa-rotate text-indigo-400");
             });
 
             // コメント送信フォーム
@@ -1457,7 +1424,7 @@
                 e.preventDefault();
                 const text = commentInput.value.trim();
                 if (!text) return;
-                submitComment(text, commentTagSelect.value, false);
+                submitComment(text, commentTagSelect.value);
                 commentInput.value = '';
                 showToast("コメントを送信しました！", "fa-solid fa-paper-plane text-indigo-400");
             });
@@ -1474,31 +1441,6 @@
                     commentFilter = btn.getAttribute('data-filter');
                     renderCommentList();
                 });
-            });
-
-            // 講義コード（ルーム）変更
-            const changeRoomBtn = document.getElementById('changeRoomBtn');
-            function applyRoomChange() {
-                const val = roomInput.value.trim().toUpperCase();
-                if (!val) return;
-                const oldRoom = currentRoom;
-                currentRoom = val;
-                roomInput.value = currentRoom;
-
-                if (mqttClient && mqttConnected) {
-                    try {
-                        mqttClient.unsubscribe(`lecturepulse/v2/${oldRoom}`);
-                        mqttClient.subscribe(`lecturepulse/v2/${currentRoom}`);
-                    } catch (e) {}
-                }
-
-                updateDashboardAndChart();
-                renderCommentList();
-                showToast(`講義ルーム「${currentRoom}」に入室しました`, "fa-solid fa-door-open text-emerald-400");
-            }
-            changeRoomBtn.addEventListener('click', applyRoomChange);
-            roomInput.addEventListener('keydown', (e) => {
-                if (e.key === 'Enter') applyRoomChange();
             });
 
             // QRコードモーダル制御
@@ -1522,7 +1464,7 @@
                 if (customVal) renderRoomQrCode(customVal);
             });
 
-            // 共有URLコピー（iframe内でも確実に動作するexecCommand対応）
+            // 共有URLコピー
             document.getElementById('copyShareUrlBtn').addEventListener('click', () => {
                 shareUrlInput.select();
                 document.execCommand('copy');
@@ -1537,7 +1479,7 @@
                 if (!dataUrl) return;
                 const a = document.createElement('a');
                 a.href = dataUrl;
-                a.download = `QR_${currentRoom}.png`;
+                a.download = `LecturePulse_QR.png`;
                 document.body.appendChild(a);
                 a.click();
                 document.body.removeChild(a);
@@ -1562,6 +1504,7 @@
             // グラフ種類の切り替え
             const toggleChartTypeBtn = document.getElementById('toggleChartTypeBtn');
             toggleChartTypeBtn.addEventListener('click', () => {
+                if (!timelineChart) return;
                 chartType = (chartType === 'line') ? 'bar' : 'line';
                 timelineChart.config.type = chartType;
                 toggleChartTypeBtn.textContent = (chartType === 'line') ? '折れ線グラフ' : '棒グラフ';
@@ -1579,83 +1522,9 @@
                 showToast(soundEnabled ? "効果音をONにしました" : "効果音をミュートしました");
             });
 
-            // 模擬アクセス（リアクションとコメントの両方をシミュレート）
-            const simBotBtn = document.getElementById('simBotBtn');
-            const simBotText = document.getElementById('simBotText');
-            const sampleComments = [
-                { text: "ここの具体例すごくわかりやすいです！", tag: "insight" },
-                { text: "さっきのグラフの縦軸は何を表していますか？", tag: "question" },
-                { text: "なるほど、そういう仕組みだったのか！", tag: "comment" },
-                { text: "少し進み方が速いのでもう一回お願いしたいです", tag: "help" },
-                { text: "テストに出そうな重要ポイントですね", tag: "insight" }
-            ];
-
-            simBotBtn.addEventListener('click', () => {
-                if (simBotInterval) {
-                    clearInterval(simBotInterval);
-                    simBotInterval = null;
-                    simBotText.textContent = "模擬アクセス: OFF";
-                    simBotBtn.classList.remove('bg-amber-500/30', 'border-amber-400');
-                    showToast("模擬アクセスを停止しました");
-                } else {
-                    simBotText.textContent = "模擬アクセス: 稼働中";
-                    simBotBtn.classList.add('bg-amber-500/30', 'border-amber-400');
-                    showToast("複数人の学生による同時リアクション＆コメントを開始しました！", "fa-solid fa-robot text-amber-400");
-                    
-                    const types = ['like', 'like', 'insight', 'bad', 'question'];
-                    let tick = 0;
-                    simBotInterval = setInterval(() => {
-                        tick++;
-                        const randomType = types[Math.floor(Math.random() * types.length)];
-                        triggerReaction(randomType, true);
-
-                        // 6回に1回程度模擬コメントも投稿
-                        if (tick % 6 === 0) {
-                            const sample = sampleComments[Math.floor(Math.random() * sampleComments.length)];
-                            submitComment(sample.text, sample.tag, true);
-                        }
-                    }, 850);
-                }
-            });
-
-            // CSVエクスポート（推移データ＋コメント一覧）
-            document.getElementById('exportCsvBtn').addEventListener('click', () => {
-                const labels = timelineChart.data.labels;
-                const dLike = timelineChart.data.datasets[0].data;
-                const dInsight = timelineChart.data.datasets[1].data;
-                const dBad = timelineChart.data.datasets[2].data;
-                const dQuestion = timelineChart.data.datasets[3].data;
-
-                let csvContent = "\uFEFF【単位時間別リアクション推移】\n時刻,講義コード,いいね,なるほど,Bad_むずかしい,少し速い_疑問,合計\n";
-                for (let i = 0; i < labels.length; i++) {
-                    const sum = dLike[i] + dInsight[i] + dBad[i] + dQuestion[i];
-                    csvContent += `${labels[i]},${currentRoom},${dLike[i]},${dInsight[i]},${dBad[i]},${dQuestion[i]},${sum}\n`;
-                }
-
-                const roomComments = allComments.filter(c => c.room === currentRoom);
-                csvContent += "\n【コメント・質問ログ】\n時刻,タグ,コメント内容,共感数\n";
-                roomComments.forEach(c => {
-                    const tStr = formatTimeLabel(c.timestamp, 10);
-                    const safeText = `"${(c.text || '').replace(/"/g, '""')}"`;
-                    csvContent += `${tStr},${c.tag},${safeText},${c.likes || 0}\n`;
-                });
-
-                const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = `lecture_pulse_${currentRoom}.csv`;
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
-                URL.revokeObjectURL(url);
-                showToast("推移＆コメントのCSVをダウンロードしました", "fa-solid fa-file-csv text-emerald-400");
-            });
-
             // データリセット確認モーダル
             const confirmModal = document.getElementById('confirmModal');
             document.getElementById('clearRoomDataBtn').addEventListener('click', () => {
-                document.getElementById('confirmRoomName').textContent = currentRoom;
                 confirmModal.classList.remove('hidden');
                 confirmModal.classList.add('flex');
             });
@@ -1663,53 +1532,23 @@
                 confirmModal.classList.add('hidden');
                 confirmModal.classList.remove('flex');
             });
-            document.getElementById('executeClearBtn').addEventListener('click', async () => {
+            document.getElementById('executeClearBtn').addEventListener('click', () => {
                 confirmModal.classList.add('hidden');
                 confirmModal.classList.remove('flex');
 
-                const targetReactions = allReactions.filter(r => r.room === currentRoom);
-                allReactions = allReactions.filter(r => r.room !== currentRoom);
-                allComments = allComments.filter(c => c.room !== currentRoom);
+                allReactions = [];
+                allComments = [];
+                totalCounts = { like: 0, insight: 0, bad: 0, question: 0 };
+                seenEventIds.clear();
                 updateDashboardAndChart();
                 renderCommentList();
 
-                if (db && currentUser) {
-                    for (const item of targetReactions) {
-                        if (item.id) {
-                            try {
-                                await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'lecture_reactions', item.id));
-                            } catch (e) {}
-                        }
-                    }
-                }
-                showToast(`講義ルーム「${currentRoom}」の記録をリセットしました`, "fa-solid fa-trash-can text-rose-400");
-            });
-
-            // GitHub公開ガイドモーダル制御
-            const githubModal = document.getElementById('githubModal');
-            document.getElementById('githubGuideBtn').addEventListener('click', () => {
-                githubModal.classList.remove('hidden');
-                githubModal.classList.add('flex');
-            });
-            const closeGithubModal = () => {
-                githubModal.classList.add('hidden');
-                githubModal.classList.remove('flex');
-            };
-            document.getElementById('closeGithubModalBtn').addEventListener('click', closeGithubModal);
-            document.getElementById('closeGithubModalBtnBottom').addEventListener('click', closeGithubModal);
-
-            // カスタムFirebase Configの適用
-            document.getElementById('applyCustomFirebaseBtn').addEventListener('click', () => {
-                const raw = document.getElementById('customFirebaseInput').value.trim();
-                if (!raw) return;
-                try {
-                    const parsed = JSON.parse(raw);
-                    initRealtimeSync(parsed);
-                    closeGithubModal();
-                    showToast("カスタムFirebase設定で接続しました！", "fa-solid fa-bolt text-emerald-400");
-                } catch (e) {
-                    showToast("JSONの形式が正しくありません。", "fa-solid fa-circle-exclamation text-rose-400");
-                }
+                broadcastRealtimeEvent({
+                    kind: 'clear_all',
+                    senderId: currentUser.uid,
+                    timestamp: Date.now()
+                });
+                showToast("講義の記録をリセットしました", "fa-solid fa-trash-can text-rose-400");
             });
         });
     </script>
